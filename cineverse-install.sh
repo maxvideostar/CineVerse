@@ -3515,6 +3515,7 @@ LIVE = {}            # (channel_id, variant) -> LiveSession
 LIVE_LOCK = threading.RLock()
 LIVE_TOKENS = {}     # token Chromecast -> (channel_id, variant)
 EPG_STATE = {"running": False, "last": 0, "count": 0, "err": ""}
+CH_CHECK_STATE = {"running": False, "last": 0, "done": 0, "total": 0, "disabled": 0, "err": ""}
 
 
 def live_probe(url, ua=""):
@@ -4054,6 +4055,41 @@ def refresh_epg():
         EPG_STATE["running"] = False
 
 
+def run_channel_check(only_enabled=True):
+    """Testează toate canalele cu ffprobe și dezactivează cele care nu răspund."""
+    if CH_CHECK_STATE["running"]:
+        return
+    CH_CHECK_STATE.update(running=True, err="", done=0, disabled=0)
+    try:
+        filt = "WHERE enabled=1" if only_enabled else ""
+        chs = q(f"SELECT * FROM live_channels {filt} ORDER BY COALESCE(num,99999)")
+        CH_CHECK_STATE["total"] = len(chs)
+        disabled = 0
+        for ch in chs:
+            try:
+                pr = live_probe(ch["url"], ch["ua"] or "")
+                x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps({**pr, "t": time.time()}), ch["id"]))
+                if not pr.get("ok"):
+                    x("UPDATE live_channels SET enabled=0 WHERE id=?", (ch["id"],))
+                    # opreste sesiunea live daca e pornita
+                    for k in list(LIVE.keys()):
+                        if k[0] == ch["id"]:
+                            try: LIVE[k].stop()
+                            except: pass
+                    disabled += 1
+            except Exception as e:
+                log.warning("ch_check canal %s: %s", ch["name"], e)
+            CH_CHECK_STATE["done"] += 1
+            CH_CHECK_STATE["disabled"] = disabled
+        CH_CHECK_STATE["last"] = time.time()
+        log.info("Verificare canale: %d testate, %d dezactivate", len(chs), disabled)
+    except Exception as e:
+        CH_CHECK_STATE["err"] = str(e)[:200]
+        log.warning("run_channel_check: %s", e)
+    finally:
+        CH_CHECK_STATE["running"] = False
+
+
 def live_refresher():
     time.sleep(20)
     while True:
@@ -4064,6 +4100,10 @@ def live_refresher():
                     refresh_playlist(pl["id"])
             if S("epg_urls") and time.time() - EPG_STATE["last"] > 6 * 3600:
                 refresh_epg()
+            # verificare automata canale – o data pe zi, noaptea
+            check_iv = 86400  # 24h
+            if time.time() - CH_CHECK_STATE["last"] > check_iv and not CH_CHECK_STATE["running"]:
+                threading.Thread(target=run_channel_check, daemon=True).start()
         except Exception as e:
             log.warning("live refresher: %s", e)
         time.sleep(600)
@@ -4194,6 +4234,25 @@ async def admin_live_epg(req: Request):
         set_S("epg_urls", d["urls"].strip())
     threading.Thread(target=refresh_epg, daemon=True).start()
     return {"ok": True}
+
+
+@app.post("/api/admin/live/check")
+async def admin_live_check(req: Request):
+    """Porneste verificarea manuala a tuturor canalelor."""
+    need_admin(req)
+    if CH_CHECK_STATE["running"]:
+        return {"ok": False, "msg": "Verificare deja în curs"}
+    d = await req.json()
+    only_enabled = d.get("only_enabled", True)
+    threading.Thread(target=run_channel_check, args=(only_enabled,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/admin/live/check")
+def admin_live_check_status(req: Request):
+    """Status curent al verificarii."""
+    need_admin(req)
+    return dict(CH_CHECK_STATE)
 
 
 # ---------------------------------------------------------------- monitorizare sistem
@@ -7397,6 +7456,20 @@ async function admTv(){
       <div id="chtest" style="margin:12px 0;color:#aaa;font-size:13px"></div>
       <div class="btns"><button class="bsm" id="chtestbtn">Testează</button><button class="bsm red" id="chsavebtn">Salvează canalul</button><button class="bsm hidden" id="chcancelbtn">Anulează editarea</button></div>
      </div>
+     <div class="panel" id="chkpanel"><h3>Verificare canale</h3>
+      <p style="color:#8a93a8;font-size:13px;margin-bottom:12px">Testează fiecare canal cu ffprobe și dezactivează automat cele care nu răspund. Verificarea automată rulează o dată la 24h.</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+       <button class="bsm red" id="chkbtn">▶ Verifică acum canalele active</button>
+       <button class="bsm" id="chkallbtn">Verifică toate (inclusiv dezactivate)</button>
+       <span id="chkst" style="font-size:13px;color:#8a93a8"></span>
+      </div>
+      <div id="chkbar" style="display:none;margin-top:12px">
+       <div style="background:#1a2236;border-radius:4px;height:8px;overflow:hidden">
+        <div id="chkprog" style="height:100%;background:var(--red);transition:width .4s;width:0%"></div>
+       </div>
+       <p id="chkinfo" style="font-size:13px;color:#aaa;margin-top:6px"></p>
+      </div>
+     </div>
      <div class="panel"><h3>Canale (${d.channels.length})</h3>
       ${d.channels.length?`<div style="overflow-x:auto"><table class="acthist"><tr><th>#</th><th>Nume</th><th>Grup</th><th>Sursă</th><th>Stare</th><th>EPG</th><th></th></tr>
       ${d.channels.map(c=>`<tr><td>${c.num??""}</td><td>${c.logo?`<img src="/api/live/logo/${c.id}" style="height:20px;vertical-align:-5px;margin-right:6px" alt="" onerror="this.remove()">`:""}${esc(c.name)}</td>
@@ -7474,6 +7547,44 @@ async function admTv(){
     $$("[data-plref]").forEach(b=>b.onclick=async()=>{await api(`/api/admin/live/playlist/${b.dataset.plref}/refresh`,{method:"POST"});t("refresh_started");setTimeout(draw,1200)});
     $$("[data-pldel]").forEach(b=>b.onclick=async()=>{if(!confirm(t("confirm_del_playlist")))return;await api("/api/admin/live/playlist/"+b.dataset.pldel,{method:"DELETE"});t("playlist_deleted");draw()});
     $("#epgsavebtn").onclick=async()=>{await api("/api/admin/live/epg",{method:"POST",body:{urls:$("#epg_urls").value}});t("epg_updating");setTimeout(draw,1500)};
+
+    // verificare canale
+    let _chkT=null;
+    function chkStop(){clearInterval(_chkT);_chkT=null}
+    async function chkPoll(){
+      try{
+        const s=await api("/api/admin/live/check");
+        const pct=s.total?Math.round(s.done/s.total*100):0;
+        $("#chkprog").style.width=pct+"%";
+        $("#chkinfo").textContent=s.running
+          ?`Se verifică: ${s.done}/${s.total} canale… ${s.disabled} dezactivate până acum`
+          :`Finalizat: ${s.done} testate, ${s.disabled} dezactivate${s.err?" — eroare: "+s.err:""}${s.last?" · ultima: "+ago(s.last):""}`;
+        if(!s.running){
+          chkStop();
+          $("#chkbtn").disabled=false;$("#chkallbtn").disabled=false;
+          $("#chkst").textContent=s.disabled?`✓ ${s.disabled} canale dezactivate`:"✓ Toate canalele sunt OK";
+          $("#chkst").style.color=s.disabled?"#e87c03":"#4caf82";
+          if(s.disabled)setTimeout(draw,800);
+        }
+      }catch(e){chkStop();$("#chkst").textContent="Eroare: "+e.message;$("#chkst").style.color="#e50914"}
+    }
+    async function startCheck(only_enabled){
+      try{
+        const r=await api("/api/admin/live/check",{method:"POST",body:{only_enabled}});
+        if(!r.ok){$("#chkst").textContent=r.msg||"Deja în curs";return}
+        $("#chkbtn").disabled=true;$("#chkallbtn").disabled=true;
+        $("#chkbar").style.display="";$("#chkst").textContent="";
+        $("#chkprog").style.width="0%";$("#chkinfo").textContent="Se pornește…";
+        chkStop();_chkT=setInterval(chkPoll,2000);
+      }catch(e){$("#chkst").textContent="Eroare: "+e.message;$("#chkst").style.color="#e50914"}
+    }
+    // verifica starea la deschidere
+    api("/api/admin/live/check").then(s=>{
+      if(s.last){$("#chkst").textContent=`Ultima verificare: ${ago(s.last)} · ${s.disabled} dezactivate`;$("#chkst").style.color="#8a93a8"}
+      if(s.running){$("#chkbar").style.display="";$("#chkbtn").disabled=true;$("#chkallbtn").disabled=true;_chkT=setInterval(chkPoll,2000)}
+    }).catch(()=>{});
+    $("#chkbtn").onclick=()=>startCheck(true);
+    $("#chkallbtn").onclick=()=>startCheck(false);
   };
   await draw();
 }

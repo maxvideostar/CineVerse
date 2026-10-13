@@ -3367,6 +3367,7 @@ LIVE = {}            # (channel_id, variant) -> LiveSession
 LIVE_LOCK = threading.RLock()
 LIVE_TOKENS = {}     # token Chromecast -> (channel_id, variant)
 EPG_STATE = {"running": False, "last": 0, "count": 0, "err": ""}
+CH_CHECK_STATE = {"running": False, "last": 0, "done": 0, "total": 0, "disabled": 0, "err": ""}
 
 
 def live_probe(url, ua=""):
@@ -3906,6 +3907,41 @@ def refresh_epg():
         EPG_STATE["running"] = False
 
 
+def run_channel_check(only_enabled=True):
+    """Testează toate canalele cu ffprobe și dezactivează cele care nu răspund."""
+    if CH_CHECK_STATE["running"]:
+        return
+    CH_CHECK_STATE.update(running=True, err="", done=0, disabled=0)
+    try:
+        filt = "WHERE enabled=1" if only_enabled else ""
+        chs = q(f"SELECT * FROM live_channels {filt} ORDER BY COALESCE(num,99999)")
+        CH_CHECK_STATE["total"] = len(chs)
+        disabled = 0
+        for ch in chs:
+            try:
+                pr = live_probe(ch["url"], ch["ua"] or "")
+                x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps({**pr, "t": time.time()}), ch["id"]))
+                if not pr.get("ok"):
+                    x("UPDATE live_channels SET enabled=0 WHERE id=?", (ch["id"],))
+                    # opreste sesiunea live daca e pornita
+                    for k in list(LIVE.keys()):
+                        if k[0] == ch["id"]:
+                            try: LIVE[k].stop()
+                            except: pass
+                    disabled += 1
+            except Exception as e:
+                log.warning("ch_check canal %s: %s", ch["name"], e)
+            CH_CHECK_STATE["done"] += 1
+            CH_CHECK_STATE["disabled"] = disabled
+        CH_CHECK_STATE["last"] = time.time()
+        log.info("Verificare canale: %d testate, %d dezactivate", len(chs), disabled)
+    except Exception as e:
+        CH_CHECK_STATE["err"] = str(e)[:200]
+        log.warning("run_channel_check: %s", e)
+    finally:
+        CH_CHECK_STATE["running"] = False
+
+
 def live_refresher():
     time.sleep(20)
     while True:
@@ -3916,6 +3952,10 @@ def live_refresher():
                     refresh_playlist(pl["id"])
             if S("epg_urls") and time.time() - EPG_STATE["last"] > 6 * 3600:
                 refresh_epg()
+            # verificare automata canale – o data pe zi, noaptea
+            check_iv = 86400  # 24h
+            if time.time() - CH_CHECK_STATE["last"] > check_iv and not CH_CHECK_STATE["running"]:
+                threading.Thread(target=run_channel_check, daemon=True).start()
         except Exception as e:
             log.warning("live refresher: %s", e)
         time.sleep(600)
@@ -4046,6 +4086,25 @@ async def admin_live_epg(req: Request):
         set_S("epg_urls", d["urls"].strip())
     threading.Thread(target=refresh_epg, daemon=True).start()
     return {"ok": True}
+
+
+@app.post("/api/admin/live/check")
+async def admin_live_check(req: Request):
+    """Porneste verificarea manuala a tuturor canalelor."""
+    need_admin(req)
+    if CH_CHECK_STATE["running"]:
+        return {"ok": False, "msg": "Verificare deja în curs"}
+    d = await req.json()
+    only_enabled = d.get("only_enabled", True)
+    threading.Thread(target=run_channel_check, args=(only_enabled,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/admin/live/check")
+def admin_live_check_status(req: Request):
+    """Status curent al verificarii."""
+    need_admin(req)
+    return dict(CH_CHECK_STATE)
 
 
 # ---------------------------------------------------------------- monitorizare sistem
