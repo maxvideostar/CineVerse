@@ -2626,9 +2626,9 @@ function applyLang(){
 function setLang(l){_lang=l;try{localStorage.setItem("lang",l)}catch(e){}document.getElementById("htmlroot").lang=l;updateLangBtn();applyLang();route()}
 function toggleLang(){setLang(_lang==="ro"?"en":"ro")}
 function updateLangBtn(){const b=document.getElementById("langbtn");if(!b)return;b.innerHTML=_lang==="ro"?'<span style="color:#fff">RO</span> | <span style="color:#888">EN</span>':'<span style="color:#888">RO</span> | <span style="color:#fff">EN</span>'}
-// apply lang btn and static text on load
+// apply lang btn and static text on load (no route() here — avoid re-render on load)
 document.addEventListener("DOMContentLoaded",()=>{updateLangBtn();applyLang();});
-setTimeout(()=>{updateLangBtn();applyLang();},0);
+setTimeout(()=>{updateLangBtn();applyLang();},200);
 
 boot().then(()=>{if(!ME)showLogin()});
 </script>
