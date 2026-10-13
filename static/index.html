@@ -478,7 +478,7 @@ body.casting{padding-bottom:84px}
     </div>
     <div class="right">
       <div class="sbox" id="sbox"><button id="sbtn" aria-label="Caută"><svg class="ico"><use href="#i-search"/></svg></button><input id="sinput" placeholder="Titluri, actori, genuri"></div>
-      <button id="langbtn" onclick="toggleLang()" style="font-size:13px;font-weight:700;letter-spacing:1px;padding:4px 8px;border:1px solid rgba(255,255,255,.3);border-radius:4px;color:#ccc" title="Schimbă limba / Switch language">RO | EN</button>
+
       <button id="castbtn" class="castbtn hidden" title="Google Cast"><svg class="ico"><use href="#i-cast"/></svg></button>
       <div class="umenu" id="umenu"><button class="avatar" id="av"></button>
         <div class="dd"><div style="padding:8px 16px;color:#aaa;font-size:13px" id="uname"></div>
@@ -2603,32 +2603,8 @@ en:{
   email_settings_saved:"Email settings saved",
   logged_out_all:"You have been signed out of all devices.",
 }};
-let _lang=(()=>{try{return localStorage.getItem("lang")||"ro"}catch(e){return "ro"}})();
-function t(k){return(LANG[_lang]&&LANG[_lang][k])||LANG.ro[k]||k}
-function applyLang(){
-  // nav links
-  const nl=document.querySelector("#nav .links");
-  if(nl){const as=nl.querySelectorAll("a[data-r]");as.forEach(a=>{const r=a.dataset.r;if(r&&LANG[_lang]["nav_"+r])a.textContent=LANG[_lang]["nav_"+r]});}
-  // search placeholder
-  const si=document.getElementById("sinput");if(si)si.placeholder=t("nav_search_ph");
-  // user menu static items
-  const admlink=document.getElementById("admlink");if(admlink)admlink.textContent=t("menu_admin");
-  const dd=document.querySelector("#umenu .dd");
-  if(dd){dd.querySelectorAll("button").forEach(b=>{
-    const oc=b.getAttribute("onclick")||"";
-    if(oc.includes("changePw"))b.textContent=t("menu_changepw");
-    else if(oc.includes("secDialog"))b.textContent=t("menu_security");
-    else if(oc.includes("logoutAll"))b.textContent=t("menu_logout_all");
-    else if(oc.includes("changeServer"))b.textContent=t("menu_change_server");
-    else if(oc.includes("logout"))b.textContent=t("menu_logout");
-  });}
-}
-function setLang(l){_lang=l;try{localStorage.setItem("lang",l)}catch(e){}document.getElementById("htmlroot").lang=l;updateLangBtn();applyLang();route()}
-function toggleLang(){setLang(_lang==="ro"?"en":"ro")}
-function updateLangBtn(){const b=document.getElementById("langbtn");if(!b)return;b.innerHTML=_lang==="ro"?'<span style="color:#fff">RO</span> | <span style="color:#888">EN</span>':'<span style="color:#888">RO</span> | <span style="color:#fff">EN</span>'}
-// apply lang btn and static text on load (no route() here — avoid re-render on load)
-document.addEventListener("DOMContentLoaded",()=>{updateLangBtn();applyLang();});
-setTimeout(()=>{updateLangBtn();applyLang();},200);
+const _lang="ro";
+function t(k){return(LANG.ro[k])||k}
 
 boot().then(()=>{if(!ME)showLogin()});
 </script>
