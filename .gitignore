@@ -6,3 +6,5 @@ __pycache__/
 *.log
 transcode/
 outputs/
+# index.html la radacina e copie din static/ folosita de build.sh
+index.html
