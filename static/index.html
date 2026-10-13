@@ -2605,12 +2605,30 @@ en:{
 }};
 let _lang=(()=>{try{return localStorage.getItem("lang")||"ro"}catch(e){return "ro"}})();
 function t(k){return(LANG[_lang]&&LANG[_lang][k])||LANG.ro[k]||k}
-function setLang(l){_lang=l;try{localStorage.setItem("lang",l)}catch(e){}document.getElementById("htmlroot").lang=l;updateLangBtn();route()}
+function applyLang(){
+  // nav links
+  const nl=document.querySelector("#nav .links");
+  if(nl){const as=nl.querySelectorAll("a[data-r]");as.forEach(a=>{const r=a.dataset.r;if(r&&LANG[_lang]["nav_"+r])a.textContent=LANG[_lang]["nav_"+r]});}
+  // search placeholder
+  const si=document.getElementById("sinput");if(si)si.placeholder=t("nav_search_ph");
+  // user menu static items
+  const admlink=document.getElementById("admlink");if(admlink)admlink.textContent=t("menu_admin");
+  const dd=document.querySelector("#umenu .dd");
+  if(dd){dd.querySelectorAll("button").forEach(b=>{
+    const oc=b.getAttribute("onclick")||"";
+    if(oc.includes("changePw"))b.textContent=t("menu_changepw");
+    else if(oc.includes("secDialog"))b.textContent=t("menu_security");
+    else if(oc.includes("logoutAll"))b.textContent=t("menu_logout_all");
+    else if(oc.includes("changeServer"))b.textContent=t("menu_change_server");
+    else if(oc.includes("logout"))b.textContent=t("menu_logout");
+  });}
+}
+function setLang(l){_lang=l;try{localStorage.setItem("lang",l)}catch(e){}document.getElementById("htmlroot").lang=l;updateLangBtn();applyLang();route()}
 function toggleLang(){setLang(_lang==="ro"?"en":"ro")}
 function updateLangBtn(){const b=document.getElementById("langbtn");if(!b)return;b.innerHTML=_lang==="ro"?'<span style="color:#fff">RO</span> | <span style="color:#888">EN</span>':'<span style="color:#888">RO</span> | <span style="color:#fff">EN</span>'}
-// apply lang btn on load
-document.addEventListener("DOMContentLoaded",updateLangBtn);
-setTimeout(updateLangBtn,0);
+// apply lang btn and static text on load
+document.addEventListener("DOMContentLoaded",()=>{updateLangBtn();applyLang();});
+setTimeout(()=>{updateLangBtn();applyLang();},0);
 
 boot().then(()=>{if(!ME)showLogin()});
 </script>
