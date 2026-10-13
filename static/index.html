@@ -2046,7 +2046,17 @@ async function admTv(){
         <td>${c.epg?c.epg+" prog.":"—"}</td>
         <td style="text-align:right;white-space:nowrap"><button class="bsm" data-edit="${c.id}">Editează</button> <button class="bsm" data-del="${c.id}">Șterge</button></td></tr>`).join("")}</table></div>`:'<p style="color:#8a93a8">Niciun canal încă.</p>'}
      </div>
-     <div class="panel"><h3>Import listă M3U</h3><div class="fg">
+     <div class="panel"><h3>Import listă M3U</h3>
+      <div style="margin-bottom:16px;padding:14px;background:#0b1120;border:1px solid #36415c;border-radius:6px">
+       <p style="color:#ccc;margin-bottom:10px;font-size:14px">📁 Încarcă fișier .m3u de pe calculator</p>
+       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input type="file" id="pl_file" accept=".m3u,.m3u8" style="color:#ccc;font-size:13px;flex:1;min-width:200px">
+        <input id="pf_name" placeholder="Nume listă (opțional)" style="background:#28324a;border:1px solid #445070;border-radius:4px;color:#fff;padding:8px;font-size:13px;width:180px">
+        <button class="bsm red" id="pfuploadbtn">Încarcă</button>
+       </div>
+       <div id="pfmsg" style="margin-top:8px;font-size:13px;color:#8a93a8"></div>
+      </div>
+      <div class="fg">
        <label>URL listă M3U</label><input id="pl_url" placeholder="http://.../lista.m3u">
        <label>Nume listă</label><input id="pl_name" placeholder="opțional">
       </div><div class="btns"><button class="bsm red" id="pladdbtn">Adaugă listă din URL</button></div>
@@ -2085,6 +2095,23 @@ async function admTv(){
       try{const r=await api("/api/admin/live/playlist",{method:"POST",body:{url,name:$("#pl_name").value.trim()}});toast(`Listă adăugată – ${r.count} canale`);$("#pl_url").value="";$("#pl_name").value="";draw()}catch(e){alert(e.message)}};
     $("#ptaddbtn").onclick=async()=>{const text=$("#pt_text").value;if(!text.trim())return;
       try{const r=await api("/api/admin/live/playlist",{method:"POST",body:{text,name:$("#pt_name").value.trim()}});toast(`Import reușit – ${r.count} canale`);$("#pt_text").value="";$("#pt_name").value="";draw()}catch(e){alert(e.message)}};
+    $("#pfuploadbtn").onclick=async()=>{
+      const f=$("#pl_file").files[0],msg=$("#pfmsg"),btn=$("#pfuploadbtn");
+      if(!f){msg.textContent="Alege un fișier .m3u mai întâi.";msg.style.color="#e87c03";return}
+      btn.disabled=true;msg.textContent="Se încarcă…";msg.style.color="#e5c414";
+      try{
+        const res=await fetch("/api/admin/live/playlist/upload",{method:"POST",
+          credentials:"same-origin",
+          headers:{"X-Playlist-Name":$("#pf_name").value.trim()||f.name.replace(/\.m3u8?$/i,"")},
+          body:f});
+        if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e.detail||"Eroare "+res.status)}
+        const r=await res.json();
+        msg.textContent=`✓ ${r.count} canale importate`;msg.style.color="#4caf82";
+        $("#pl_file").value="";$("#pf_name").value="";
+        setTimeout(draw,800);
+      }catch(e){msg.textContent="Eroare: "+e.message;msg.style.color="#e50914"}
+      btn.disabled=false;
+    };
     $$("[data-plref]").forEach(b=>b.onclick=async()=>{await api(`/api/admin/live/playlist/${b.dataset.plref}/refresh`,{method:"POST"});t("refresh_started");setTimeout(draw,1200)});
     $$("[data-pldel]").forEach(b=>b.onclick=async()=>{if(!confirm(t("confirm_del_playlist")))return;await api("/api/admin/live/playlist/"+b.dataset.pldel,{method:"DELETE"});t("playlist_deleted");draw()});
     $("#epgsavebtn").onclick=async()=>{await api("/api/admin/live/epg",{method:"POST",body:{urls:$("#epg_urls").value}});t("epg_updating");setTimeout(draw,1500)};

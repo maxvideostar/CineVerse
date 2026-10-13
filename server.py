@@ -3998,6 +3998,29 @@ async def admin_live_playlist(req: Request):
     return {"ok": True, "count": r["count"]}
 
 
+@app.post("/api/admin/live/playlist/upload")
+async def admin_live_playlist_upload(req: Request):
+    """Primește fișier .m3u ca flux brut și îl importă ca playlist nou."""
+    need_admin(req)
+    name = req.headers.get("X-Playlist-Name", "Fișier M3U")[:60]
+    total = 0
+    chunks = []
+    async for chunk in req.stream():
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > 50 * 1024 * 1024:
+            raise HTTPException(413, "Fișier prea mare (max 50 MB)")
+    if not total:
+        raise HTTPException(400, "Fișier gol")
+    text = b"".join(chunks).decode("utf-8", errors="replace")
+    if "#EXTM3U" not in text and "#EXTINF" not in text:
+        raise HTTPException(400, "Nu pare un fișier M3U valid")
+    pid = x("INSERT INTO live_playlists(url,name,last,count) VALUES('',?,?,0)", (name, time.time()))
+    n = import_m3u(pid, text)
+    x("UPDATE live_playlists SET count=? WHERE id=?", (n, pid))
+    return {"ok": True, "count": n}
+
+
 @app.post("/api/admin/live/playlist/{pid}/refresh")
 async def admin_live_pl_refresh(pid: int, req: Request):
     need_admin(req)
