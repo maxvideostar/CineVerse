@@ -2773,6 +2773,35 @@ async def mark_watched(media_id: int, req: Request):
     return {"ok": True}
 
 
+THUMB_DIR = DATA / "thumbs"
+THUMB_DIR.mkdir(exist_ok=True)
+
+@app.get("/api/media/{media_id}/thumb")
+def media_thumb(media_id: int, t: float, req: Request):
+    """Returneaza un frame JPEG la timestamp t (secunde) din fisierul media."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT path, duration FROM media WHERE id=?", (media_id,), one=True))
+    if not m:
+        raise HTTPException(404)
+    # cache: un fisier per (media_id, t rotunjit la 5s)
+    ts = round(t / 5) * 5
+    cache_path = THUMB_DIR / f"{media_id}_{ts}.jpg"
+    if not cache_path.exists():
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(ts), "-i", m["path"],
+                "-vframes", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "5", str(cache_path)
+            ], capture_output=True, timeout=10)
+        except Exception as e:
+            log.warning("thumb %s@%s: %s", media_id, ts, e)
+            raise HTTPException(500)
+    if not cache_path.exists():
+        raise HTTPException(404)
+    return FileResponse(str(cache_path), media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"})
+
+
 @app.get("/api/media/{media_id}/next")
 def next_media(media_id: int, req: Request):
     u = need_user(req)

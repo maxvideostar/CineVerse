@@ -2921,6 +2921,35 @@ async def mark_watched(media_id: int, req: Request):
     return {"ok": True}
 
 
+THUMB_DIR = DATA / "thumbs"
+THUMB_DIR.mkdir(exist_ok=True)
+
+@app.get("/api/media/{media_id}/thumb")
+def media_thumb(media_id: int, t: float, req: Request):
+    """Returneaza un frame JPEG la timestamp t (secunde) din fisierul media."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT path, duration FROM media WHERE id=?", (media_id,), one=True))
+    if not m:
+        raise HTTPException(404)
+    # cache: un fisier per (media_id, t rotunjit la 5s)
+    ts = round(t / 5) * 5
+    cache_path = THUMB_DIR / f"{media_id}_{ts}.jpg"
+    if not cache_path.exists():
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(ts), "-i", m["path"],
+                "-vframes", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "5", str(cache_path)
+            ], capture_output=True, timeout=10)
+        except Exception as e:
+            log.warning("thumb %s@%s: %s", media_id, ts, e)
+            raise HTTPException(500)
+    if not cache_path.exists():
+        raise HTTPException(404)
+    return FileResponse(str(cache_path), media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"})
+
+
 @app.get("/api/media/{media_id}/next")
 def next_media(media_id: int, req: Request):
     u = need_user(req)
@@ -5703,7 +5732,7 @@ body.fs .pbot{padding:0 28px 22px}
 .seek:hover .knob{transform:scale(1)}
 .seek .tip{position:absolute;bottom:26px;transform:translateX(-50%);background:rgba(0,0,0,.88);border-radius:5px;font-size:13px;display:none;flex-direction:column;align-items:center;gap:4px;padding:5px 5px 4px;border:1px solid rgba(255,255,255,.12);pointer-events:none;z-index:10}
 .seek:hover .tip{display:flex}
-.seek .tip canvas{display:block;border-radius:3px;width:160px;height:90px;object-fit:cover;background:#000}
+.seek .tip img{display:block;border-radius:3px;width:160px;height:90px;object-fit:cover;background:#111}
 .seek .tip .tiptime{font-size:13px;font-weight:700;color:#fff;line-height:1;padding:2px 4px}
 .seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right}
 .pctrl{display:flex;align-items:center;gap:22px}
@@ -6043,8 +6072,7 @@ body.casting{padding-bottom:84px}
   <div class="pui">
     <div class="ptop"><button onclick="closePlayer()" title="Înapoi (Esc)"><svg class="ico"><use href="#i-back"/></svg></button></div>
     <div class="pbot">
-      <div class="seek" id="seek"><div class="rail"><div class="buf" id="sbuf"></div><div class="done" id="sdone"></div><div class="knob" id="sknob"></div></div><div class="tip" id="stip"><canvas id="stip_canvas" width="160" height="90"></canvas><span class="tiptime" id="stip_time"></span></div><div class="left" id="sleft"></div></div>
-      <video id="vprev" muted playsinline style="display:none;position:absolute;pointer-events:none" crossorigin="anonymous"></video>
+      <div class="seek" id="seek"><div class="rail"><div class="buf" id="sbuf"></div><div class="done" id="sdone"></div><div class="knob" id="sknob"></div></div><div class="tip" id="stip"><img id="stip_img" src="" alt="" width="160" height="90"><span class="tiptime" id="stip_time"></span></div><div class="left" id="sleft"></div></div>
       <div class="pctrl">
         <button id="bpp" title="Redă / Pauză (Spațiu)"><svg class="ico"><use href="#i-play"/></svg></button>
         <button onclick="skip(-10)" title="Înapoi 10s (←)"><svg class="ico"><use href="#i-rw"/></svg></button>
@@ -6728,9 +6756,8 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
     }
   }
   $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
-  // video preview pentru seek tooltip (doar direct, nu HLS — CORS)
-  Vprev.src="";_prevT=-1;
-  if(d.mode==="direct"){V.src=d.url;Vprev.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
+  _prevT=-1;
+  if(d.mode==="direct"){V.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
   else if(window.Hls&&Hls.isSupported()){
     hls=new Hls({startPosition:0,maxBufferLength:60,maxMaxBufferLength:180,backBufferLength:120,liveDurationInfinity:false,
                  manifestLoadingMaxRetry:10,levelLoadingMaxRetry:10,fragLoadingMaxRetry:10,xhrSetup:x=>x.withCredentials=true});
@@ -6856,36 +6883,28 @@ $("#player").addEventListener("mousemove",()=>showUI());$("#player").addEventLis
 /* seek bar */
 const seek=$("#seek");
 function seekFrac(e){const r=seek.querySelector(".rail").getBoundingClientRect();return Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))}
-const Vprev=$("#vprev"),stcan=$("#stip_canvas"),stctx=stcan.getContext("2d"),sttime=$("#stip_time");
-let _prevT=-1,_prevPending=false;
-function drawPreview(t){
-  if(Math.abs(t-_prevT)<1||_prevPending)return;
-  _prevT=t;_prevPending=true;
-  if(Vprev.src){
-    // direct mode: video separat pentru preview
-    Vprev.currentTime=t;
-  } else {
-    // HLS mode: captura frame curent din playerul principal (instant, fara seek)
-    try{stctx.drawImage(V,0,0,160,90)}catch(e){}
-    _prevPending=false;
-  }
+const stimg=$("#stip_img"),sttime=$("#stip_time");
+let _prevT=-1,_prevTimer=null;
+function loadThumb(t){
+  const ts=Math.round(t/5)*5;
+  if(ts===_prevT)return;
+  _prevT=ts;
+  stimg.src=`/api/media/${P.media}/thumb?t=${ts}`;
 }
-Vprev.addEventListener("seeked",()=>{
-  try{stctx.drawImage(Vprev,0,0,160,90)}catch(e){}
-  _prevPending=false;
-});
 seek.addEventListener("mousemove",e=>{
   const f=seekFrac(e);
   const t=f*(P.duration||0);
   const tip=$("#stip");
   sttime.textContent=fmtT(t);
   const sr=seek.getBoundingClientRect();
-  // clamp tooltip sa nu iasa din bara
   const tipW=170;
   let lx=e.clientX-sr.left;
   lx=Math.max(tipW/2,Math.min(sr.width-tipW/2,lx));
   tip.style.left=lx+"px";
-  if(P.media&&!P.live&&Vprev.src)drawPreview(t);
+  if(P.media&&!P.live){
+    clearTimeout(_prevTimer);
+    _prevTimer=setTimeout(()=>loadThumb(t),80);
+  }
 });
 seek.addEventListener("click",e=>seekTo(seekFrac(e)*P.duration));
 let drag=false;seek.addEventListener("mousedown",()=>drag=true);addEventListener("mouseup",e=>{drag=false});
