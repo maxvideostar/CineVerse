@@ -5701,8 +5701,10 @@ body.fs .pbot{padding:0 28px 22px}
 .seek .done{position:absolute;top:0;bottom:0;left:0;background:var(--red)}
 .seek .knob{position:absolute;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;background:var(--red);border-radius:50%;transform:scale(0);transition:transform .15s}
 .seek:hover .knob{transform:scale(1)}
-.seek .tip{position:absolute;bottom:26px;transform:translateX(-50%);background:rgba(0,0,0,.85);padding:4px 8px;border-radius:3px;font-size:13px;display:none}
-.seek:hover .tip{display:block}
+.seek .tip{position:absolute;bottom:26px;transform:translateX(-50%);background:rgba(0,0,0,.88);border-radius:5px;font-size:13px;display:none;flex-direction:column;align-items:center;gap:4px;padding:5px 5px 4px;border:1px solid rgba(255,255,255,.12);pointer-events:none;z-index:10}
+.seek:hover .tip{display:flex}
+.seek .tip canvas{display:block;border-radius:3px;width:160px;height:90px;object-fit:cover;background:#000}
+.seek .tip .tiptime{font-size:13px;font-weight:700;color:#fff;line-height:1;padding:2px 4px}
 .seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right}
 .pctrl{display:flex;align-items:center;gap:22px}
 .pctrl button svg{width:30px;height:30px;transition:transform .15s}.pctrl button:hover svg{transform:scale(1.2)}
@@ -6041,7 +6043,8 @@ body.casting{padding-bottom:84px}
   <div class="pui">
     <div class="ptop"><button onclick="closePlayer()" title="Înapoi (Esc)"><svg class="ico"><use href="#i-back"/></svg></button></div>
     <div class="pbot">
-      <div class="seek" id="seek"><div class="rail"><div class="buf" id="sbuf"></div><div class="done" id="sdone"></div><div class="knob" id="sknob"></div></div><div class="tip" id="stip"></div><div class="left" id="sleft"></div></div>
+      <div class="seek" id="seek"><div class="rail"><div class="buf" id="sbuf"></div><div class="done" id="sdone"></div><div class="knob" id="sknob"></div></div><div class="tip" id="stip"><canvas id="stip_canvas" width="160" height="90"></canvas><span class="tiptime" id="stip_time"></span></div><div class="left" id="sleft"></div></div>
+      <video id="vprev" muted playsinline style="display:none;position:absolute;pointer-events:none" crossorigin="anonymous"></video>
       <div class="pctrl">
         <button id="bpp" title="Redă / Pauză (Spațiu)"><svg class="ico"><use href="#i-play"/></svg></button>
         <button onclick="skip(-10)" title="Înapoi 10s (←)"><svg class="ico"><use href="#i-rw"/></svg></button>
@@ -6725,7 +6728,9 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
     }
   }
   $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
-  if(d.mode==="direct"){V.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
+  // video preview pentru seek tooltip (doar direct, nu HLS — CORS)
+  Vprev.src="";_prevT=-1;
+  if(d.mode==="direct"){V.src=d.url;Vprev.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
   else if(window.Hls&&Hls.isSupported()){
     hls=new Hls({startPosition:0,maxBufferLength:60,maxMaxBufferLength:180,backBufferLength:120,liveDurationInfinity:false,
                  manifestLoadingMaxRetry:10,levelLoadingMaxRetry:10,fragLoadingMaxRetry:10,xhrSetup:x=>x.withCredentials=true});
@@ -6851,7 +6856,37 @@ $("#player").addEventListener("mousemove",()=>showUI());$("#player").addEventLis
 /* seek bar */
 const seek=$("#seek");
 function seekFrac(e){const r=seek.querySelector(".rail").getBoundingClientRect();return Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))}
-seek.addEventListener("mousemove",e=>{const f=seekFrac(e);const tip=$("#stip");tip.textContent=fmtT(f*P.duration);const r=seek.querySelector(".rail").getBoundingClientRect();tip.style.left=(e.clientX-seek.getBoundingClientRect().left)+"px"});
+const Vprev=$("#vprev"),stcan=$("#stip_canvas"),stctx=stcan.getContext("2d"),sttime=$("#stip_time");
+let _prevT=-1,_prevPending=false;
+function drawPreview(t){
+  if(Math.abs(t-_prevT)<1||_prevPending)return;
+  _prevT=t;_prevPending=true;
+  if(Vprev.src){
+    // direct mode: video separat pentru preview
+    Vprev.currentTime=t;
+  } else {
+    // HLS mode: captura frame curent din playerul principal (instant, fara seek)
+    try{stctx.drawImage(V,0,0,160,90)}catch(e){}
+    _prevPending=false;
+  }
+}
+Vprev.addEventListener("seeked",()=>{
+  try{stctx.drawImage(Vprev,0,0,160,90)}catch(e){}
+  _prevPending=false;
+});
+seek.addEventListener("mousemove",e=>{
+  const f=seekFrac(e);
+  const t=f*(P.duration||0);
+  const tip=$("#stip");
+  sttime.textContent=fmtT(t);
+  const sr=seek.getBoundingClientRect();
+  // clamp tooltip sa nu iasa din bara
+  const tipW=170;
+  let lx=e.clientX-sr.left;
+  lx=Math.max(tipW/2,Math.min(sr.width-tipW/2,lx));
+  tip.style.left=lx+"px";
+  if(P.media&&!P.live&&Vprev.src)drawPreview(t);
+});
 seek.addEventListener("click",e=>seekTo(seekFrac(e)*P.duration));
 let drag=false;seek.addEventListener("mousedown",()=>drag=true);addEventListener("mouseup",e=>{drag=false});
 addEventListener("mousemove",e=>{if(drag){const f=seekFrac(e);$("#sdone").style.width=f*100+"%";$("#sknob").style.left=f*100+"%"}});
