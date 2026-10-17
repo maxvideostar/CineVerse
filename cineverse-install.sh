@@ -1400,11 +1400,16 @@ def scan_library():
                 g = guess(p, found[p])
                 info = ffprobe(p)
                 item_id = get_item_for(g)
+                dur = (info or {}).get("duration") or 0
                 mid = x("INSERT INTO media(item_id,path,season,episode,duration,size,probe,added) VALUES(?,?,?,?,?,?,?,?)",
-                        (item_id, p, g.get("season"), g.get("episode"), (info or {}).get("duration") or 0, os.path.getsize(p),
+                        (item_id, p, g.get("season"), g.get("episode"), dur, os.path.getsize(p),
                          json.dumps(info), time.time()))
                 find_local_subs(mid, p)
                 add_embedded_subs(mid, info)
+                # detectie credite in background (nu blocheaza scanarea)
+                if g.get("season") is not None and dur > 120:
+                    _mid, _p, _dur = mid, p, dur
+                    threading.Thread(target=lambda m=_mid,f=_p,d=_dur: x("UPDATE media SET credits_start=? WHERE id=?", (detect_credits(f,d) or max(0,d-30), m)), daemon=True).start()
                 x("UPDATE items SET added=? WHERE id=?", (time.time(), item_id))
             except Exception as e:
                 log.exception("scan %s: %s", p, e)
@@ -2085,6 +2090,7 @@ def _startup():
     threading.Thread(target=live_refresher, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=periodic_scan, daemon=True).start()
+    threading.Thread(target=credits_backfill, daemon=True).start()
 
 
 app = FastAPI(title="CineVerse by NetStreaming", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -4156,6 +4162,24 @@ def run_channel_check(only_enabled=True):
         log.warning("run_channel_check: %s", e)
     finally:
         CH_CHECK_STATE["running"] = False
+
+
+def credits_backfill():
+    """La pornire, detecteaza credits_start pentru episoadele care nu au inca valoarea."""
+    time.sleep(30)  # asteapta serverul sa porneasca complet
+    rows = q("SELECT id, path, duration FROM media WHERE season IS NOT NULL AND credits_start IS NULL AND duration > 120")
+    if not rows:
+        return
+    log.info("credits_backfill: %d episoade fara credits_start detectat", len(rows))
+    for r in rows:
+        try:
+            cs = detect_credits(r["path"], r["duration"])
+            if cs is None:
+                cs = max(0, r["duration"] - 30)
+            x("UPDATE media SET credits_start=? WHERE id=?", (cs, r["id"]))
+        except Exception as e:
+            log.warning("credits_backfill %s: %s", r["path"], e)
+    log.info("credits_backfill: finalizat")
 
 
 def live_refresher():
@@ -6684,11 +6708,20 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
     $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
-    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start||null;$("#bnext").classList.toggle("hidden",!nx.next);
+    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start!=null?nx.credits_start:undefined;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
-    // detectie credite in background (non-blocking)
-    if(P.next&&P.creditsStart===null){
-      api(`/api/media/${mid}/detect-credits`,{method:"POST"}).then(r=>{if(r.credits_start)P.creditsStart=r.credits_start}).catch(()=>{});
+    // daca credits_start nu e inca in DB, polleaza pana il obtinem (max 3 min)
+    if(P.next&&P.creditsStart===undefined){
+      let polls=0;
+      const pollCs=()=>{
+        if(P.media!==mid||polls>36)return; // renunta dupa 3 min sau daca s-a schimbat media
+        polls++;
+        api(`/api/media/${mid}/next`).then(r=>{
+          if(r.credits_start!=null){P.creditsStart=r.credits_start;log.info&&log.info("credits_start primit:"+r.credits_start)}
+          else setTimeout(pollCs,5000);
+        }).catch(()=>setTimeout(pollCs,10000));
+      };
+      setTimeout(pollCs,5000);
     }
   }
   $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
@@ -6830,8 +6863,9 @@ function tick(){
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
     $("#sleft").textContent=fmtT(D-t);
     renderSubs();
-    // threshold: credits_start detectat sau fallback D-30
-    const csThr=P.creditsStart!==null&&P.creditsStart!==undefined ? P.creditsStart : (D>120 ? D-30 : null);
+    // threshold: credits_start din DB (undefined = inca se detecteaza, null = nu exista next ep)
+    // fallback la D-30 doar daca nu avem next ep sau durata e mica (evita aparitia prematura)
+    const csThr=P.creditsStart!==undefined ? P.creditsStart : null;
     if(P.next&&!P.nextShown&&csThr!==null&&t>=csThr&&D>120&&!V.paused){
       P.nextShown=true;P.nextCancelled=false;
       // durata countdown = timp ramas de la credits_start pana la sfarsit (max 90s)

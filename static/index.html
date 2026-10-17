@@ -1198,11 +1198,20 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
     $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
-    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start||null;$("#bnext").classList.toggle("hidden",!nx.next);
+    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start!=null?nx.credits_start:undefined;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
-    // detectie credite in background (non-blocking)
-    if(P.next&&P.creditsStart===null){
-      api(`/api/media/${mid}/detect-credits`,{method:"POST"}).then(r=>{if(r.credits_start)P.creditsStart=r.credits_start}).catch(()=>{});
+    // daca credits_start nu e inca in DB, polleaza pana il obtinem (max 3 min)
+    if(P.next&&P.creditsStart===undefined){
+      let polls=0;
+      const pollCs=()=>{
+        if(P.media!==mid||polls>36)return; // renunta dupa 3 min sau daca s-a schimbat media
+        polls++;
+        api(`/api/media/${mid}/next`).then(r=>{
+          if(r.credits_start!=null){P.creditsStart=r.credits_start;log.info&&log.info("credits_start primit:"+r.credits_start)}
+          else setTimeout(pollCs,5000);
+        }).catch(()=>setTimeout(pollCs,10000));
+      };
+      setTimeout(pollCs,5000);
     }
   }
   $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
@@ -1344,8 +1353,9 @@ function tick(){
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
     $("#sleft").textContent=fmtT(D-t);
     renderSubs();
-    // threshold: credits_start detectat sau fallback D-30
-    const csThr=P.creditsStart!==null&&P.creditsStart!==undefined ? P.creditsStart : (D>120 ? D-30 : null);
+    // threshold: credits_start din DB (undefined = inca se detecteaza, null = nu exista next ep)
+    // fallback la D-30 doar daca nu avem next ep sau durata e mica (evita aparitia prematura)
+    const csThr=P.creditsStart!==undefined ? P.creditsStart : null;
     if(P.next&&!P.nextShown&&csThr!==null&&t>=csThr&&D>120&&!V.paused){
       P.nextShown=true;P.nextCancelled=false;
       // durata countdown = timp ramas de la credits_start pana la sfarsit (max 90s)
