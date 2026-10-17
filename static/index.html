@@ -1198,10 +1198,14 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
     $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
-    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;$("#bnext").classList.toggle("hidden",!nx.next);
+    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start||null;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
+    // detectie credite in background (non-blocking)
+    if(P.next&&P.creditsStart===null){
+      api(`/api/media/${mid}/detect-credits`,{method:"POST"}).then(r=>{if(r.credits_start)P.creditsStart=r.credits_start}).catch(()=>{});
+    }
   }
-  $("#nextep").classList.add("hidden");P.nextShown=false;
+  $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
   if(d.mode==="direct"){V.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
   else if(window.Hls&&Hls.isSupported()){
     hls=new Hls({startPosition:0,maxBufferLength:60,maxMaxBufferLength:180,backBufferLength:120,liveDurationInfinity:false,
@@ -1340,19 +1344,24 @@ function tick(){
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
     $("#sleft").textContent=fmtT(D-t);
     renderSubs();
-    if(P.next&&!P.nextShown&&D-t<30&&D>120&&!V.paused){
+    // threshold: credits_start detectat sau fallback D-30
+    const csThr=P.creditsStart!==null&&P.creditsStart!==undefined ? P.creditsStart : (D>120 ? D-30 : null);
+    if(P.next&&!P.nextShown&&csThr!==null&&t>=csThr&&D>120&&!V.paused){
       P.nextShown=true;P.nextCancelled=false;
+      // durata countdown = timp ramas de la credits_start pana la sfarsit (max 90s)
+      P.nxDuration=Math.min(90,Math.max(10,Math.ceil(D-csThr)));
       const ne=$("#nextep");
       const circ=2*Math.PI*22;
-      ne.innerHTML=`<div class="nxring"><svg width="52" height="52" viewBox="0 0 52 52"><circle cx="26" cy="26" r="22" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="4"/><circle id="nxarc" cx="26" cy="26" r="22" fill="none" stroke="var(--red)" stroke-width="4" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="nxnum" id="nxnum">30</div></div><div class="nxinfo"><div class="nxlabel">Urmează</div><div class="nxtitle">${P.next.title||"Episodul următor"}</div><div class="nxbtns"><button class="nxplay" onclick="playNext()">▶ Urmărește acum</button><button class="nxcancel" id="nxcancelbtn">Anulează</button></div></div>`;
+      ne.innerHTML=`<div class="nxring"><svg width="52" height="52" viewBox="0 0 52 52"><circle cx="26" cy="26" r="22" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="4"/><circle id="nxarc" cx="26" cy="26" r="22" fill="none" stroke="var(--red)" stroke-width="4" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="nxnum" id="nxnum">${P.nxDuration}</div></div><div class="nxinfo"><div class="nxlabel">Urmează</div><div class="nxtitle">${P.next.title||"Episodul următor"}</div><div class="nxbtns"><button class="nxplay" onclick="playNext()">▶ Urmărește acum</button><button class="nxcancel" id="nxcancelbtn">Anulează</button></div></div>`;
       ne.classList.remove("hidden");
       $("#nxcancelbtn").onclick=()=>{P.nextCancelled=true;ne.classList.add("hidden")};
     }
     if(P.next&&P.nextShown&&!P.nextCancelled&&!$("#nextep").classList.contains("hidden")){
       const rem=Math.max(0,Math.ceil(D-t));
       const arc=document.getElementById("nxarc");const num=document.getElementById("nxnum");
-      if(arc){const circ=2*Math.PI*22;arc.style.strokeDashoffset=((1-Math.min(rem,30)/30)*circ).toFixed(1)}
-      if(num)num.textContent=Math.min(rem,30);
+      const nd=P.nxDuration||30;
+      if(arc){const circ=2*Math.PI*22;arc.style.strokeDashoffset=((1-Math.min(rem,nd)/nd)*circ).toFixed(1)}
+      if(num)num.textContent=Math.min(rem,nd);
       if(rem<=0)playNext();
     }
   }

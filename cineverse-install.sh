@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, kind TEXT, key TEXT UNI
   runtime INTEGER, cert TEXT, cast_json TEXT DEFAULT '[]', director TEXT, trailer TEXT, added REAL, matched INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS media(id INTEGER PRIMARY KEY, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, path TEXT UNIQUE,
   season INTEGER, episode INTEGER, ep_title TEXT, ep_overview TEXT, still TEXT, air_date TEXT, duration REAL, size INTEGER,
-  probe TEXT, added REAL, subs_checked REAL DEFAULT 0);
+  probe TEXT, added REAL, subs_checked REAL DEFAULT 0, credits_start REAL DEFAULT NULL);
 CREATE TABLE IF NOT EXISTS subtitles(id INTEGER PRIMARY KEY, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE, lang TEXT,
   label TEXT, source TEXT, path TEXT, stream_index INTEGER, UNIQUE(media_id, source, path, stream_index));
 CREATE TABLE IF NOT EXISTS progress(user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
@@ -311,7 +311,8 @@ def init_db():
                            ("users", "email", "TEXT DEFAULT ''"), ("users", "email_ok", "INTEGER DEFAULT 1"),
                            ("users", "active", "INTEGER DEFAULT 1"), ("users", "totp", "TEXT DEFAULT ''"),
                            ("users", "totp_codes", "TEXT DEFAULT ''"), ("users", "signup_ip", "TEXT DEFAULT ''"), ("sessions", "ip", "TEXT"), ("sessions", "ua", "TEXT"),
-                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT")]:
+                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT"),
+                           ("media", "credits_start", "REAL DEFAULT NULL")]:
         if col not in [r[1] for r in c.execute(f"PRAGMA table_info({tbl})")]:
             c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {decl}")
     c.commit()
@@ -913,6 +914,45 @@ def ffprobe(path):
             info["subs"].append({"index": s["index"], "codec": s.get("codec_name"), "lang": lang, "title": tags.get("title", ""),
                                  "forced": bool((s.get("disposition") or {}).get("forced"))})
     return info
+
+
+def detect_credits(path, duration):
+    """Detecteaza inceputul creditelor finale folosind ffprobe blackdetect.
+    Cauta primul black frame din ultimele 5 minute ale fisierului.
+    Returneaza timestamp-ul (float secunde) sau None daca nu gaseste."""
+    if not duration or duration < 120:
+        return None
+    try:
+        # analizam doar ultimele 5 minute (sau tot filmul daca e mai scurt)
+        search_window = min(300, duration * 0.25)
+        start_offset = max(0, duration - search_window)
+        result = subprocess.run([
+            "ffprobe", "-v", "quiet",
+            "-ss", str(start_offset),
+            "-i", path,
+            "-vf", "blackdetect=d=0.5:pix_th=0.10",
+            "-an", "-f", "null", "-"
+        ], capture_output=True, timeout=120, text=True)
+        output = result.stderr
+        # parseaza liniile: [blackdetect @ ...] black_start:123.4 black_end:124.1 black_duration:0.7
+        blacks = []
+        for line in output.splitlines():
+            m = re.search(r"black_start:([\d.]+).*black_end:([\d.]+)", line)
+            if m:
+                bs = float(m.group(1)) + start_offset
+                be = float(m.group(2)) + start_offset
+                blacks.append((bs, be))
+        if not blacks:
+            return None
+        # primul black frame semnificativ (durata > 0.3s) din fereastra de cautare
+        for bs, be in blacks:
+            if (be - bs) >= 0.3 and bs > duration * 0.5:
+                log.info("credits_start detectat la %.1fs (durata totala %.1fs) pentru %s", bs, duration, path)
+                return round(bs, 1)
+        return None
+    except Exception as e:
+        log.warning("detect_credits %s: %s", path, e)
+        return None
 
 
 def os_hash(path):
@@ -2880,11 +2920,39 @@ def next_media(media_id: int, req: Request):
     u = need_user(req)
     m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
     if not m or m["season"] is None:
-        return {"next": None}
+        return {"next": None, "credits_start": None}
     n = q("SELECT * FROM media WHERE item_id=? AND (season>? OR (season=? AND episode>?)) ORDER BY season, episode LIMIT 1",
           (m["item_id"], m["season"], m["season"], m["episode"]), one=True)
+    # returneaza si credits_start pentru episodul curent
+    cs = m["credits_start"] if "credits_start" in m.keys() else None
     return {"next": {"id": n["id"], "season": n["season"], "episode": n["episode"], "title": n["ep_title"] or f"Episodul {n['episode']}",
-                     "still": n["still"]} if n else None}
+                     "still": n["still"]} if n else None,
+            "credits_start": cs}
+
+
+@app.post("/api/media/{media_id}/detect-credits")
+def detect_credits_api(media_id: int, req: Request):
+    """Detecteaza inceputul creditelor finale si salveaza in DB. Ruleaza in background."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
+    if not m:
+        raise HTTPException(404)
+    # daca deja avem rezultat, returnez direct
+    cs = m["credits_start"] if "credits_start" in m.keys() else None
+    if cs is not None:
+        return {"credits_start": cs, "cached": True}
+    # ruleaza detectia in background thread
+    def _run():
+        dur = m["duration"] or 0
+        result = detect_credits(m["path"], dur)
+        if result is None and dur > 120:
+            # fallback: ultimele 30 secunde
+            result = max(0, dur - 30)
+            log.info("credits_start fallback la %.1fs pentru media_id=%d", result, media_id)
+        if result is not None:
+            x("UPDATE media SET credits_start=? WHERE id=?", (result, media_id))
+    threading.Thread(target=_run, daemon=True).start()
+    return {"credits_start": None, "detecting": True}
 
 
 _EP_CACHE = {}
@@ -6616,10 +6684,14 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
     $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
-    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;$("#bnext").classList.toggle("hidden",!nx.next);
+    const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start||null;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
+    // detectie credite in background (non-blocking)
+    if(P.next&&P.creditsStart===null){
+      api(`/api/media/${mid}/detect-credits`,{method:"POST"}).then(r=>{if(r.credits_start)P.creditsStart=r.credits_start}).catch(()=>{});
+    }
   }
-  $("#nextep").classList.add("hidden");P.nextShown=false;
+  $("#nextep").classList.add("hidden");P.nextShown=false;P.nextCancelled=false;
   if(d.mode==="direct"){V.src=d.url;V.addEventListener("loadedmetadata",()=>{if(start>0)V.currentTime=start},{once:true})}
   else if(window.Hls&&Hls.isSupported()){
     hls=new Hls({startPosition:0,maxBufferLength:60,maxMaxBufferLength:180,backBufferLength:120,liveDurationInfinity:false,
@@ -6758,19 +6830,24 @@ function tick(){
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
     $("#sleft").textContent=fmtT(D-t);
     renderSubs();
-    if(P.next&&!P.nextShown&&D-t<30&&D>120&&!V.paused){
+    // threshold: credits_start detectat sau fallback D-30
+    const csThr=P.creditsStart!==null&&P.creditsStart!==undefined ? P.creditsStart : (D>120 ? D-30 : null);
+    if(P.next&&!P.nextShown&&csThr!==null&&t>=csThr&&D>120&&!V.paused){
       P.nextShown=true;P.nextCancelled=false;
+      // durata countdown = timp ramas de la credits_start pana la sfarsit (max 90s)
+      P.nxDuration=Math.min(90,Math.max(10,Math.ceil(D-csThr)));
       const ne=$("#nextep");
       const circ=2*Math.PI*22;
-      ne.innerHTML=`<div class="nxring"><svg width="52" height="52" viewBox="0 0 52 52"><circle cx="26" cy="26" r="22" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="4"/><circle id="nxarc" cx="26" cy="26" r="22" fill="none" stroke="var(--red)" stroke-width="4" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="nxnum" id="nxnum">30</div></div><div class="nxinfo"><div class="nxlabel">Urmează</div><div class="nxtitle">${P.next.title||"Episodul următor"}</div><div class="nxbtns"><button class="nxplay" onclick="playNext()">▶ Urmărește acum</button><button class="nxcancel" id="nxcancelbtn">Anulează</button></div></div>`;
+      ne.innerHTML=`<div class="nxring"><svg width="52" height="52" viewBox="0 0 52 52"><circle cx="26" cy="26" r="22" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="4"/><circle id="nxarc" cx="26" cy="26" r="22" fill="none" stroke="var(--red)" stroke-width="4" stroke-dasharray="${circ.toFixed(1)}" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="nxnum" id="nxnum">${P.nxDuration}</div></div><div class="nxinfo"><div class="nxlabel">Urmează</div><div class="nxtitle">${P.next.title||"Episodul următor"}</div><div class="nxbtns"><button class="nxplay" onclick="playNext()">▶ Urmărește acum</button><button class="nxcancel" id="nxcancelbtn">Anulează</button></div></div>`;
       ne.classList.remove("hidden");
       $("#nxcancelbtn").onclick=()=>{P.nextCancelled=true;ne.classList.add("hidden")};
     }
     if(P.next&&P.nextShown&&!P.nextCancelled&&!$("#nextep").classList.contains("hidden")){
       const rem=Math.max(0,Math.ceil(D-t));
       const arc=document.getElementById("nxarc");const num=document.getElementById("nxnum");
-      if(arc){const circ=2*Math.PI*22;arc.style.strokeDashoffset=((1-Math.min(rem,30)/30)*circ).toFixed(1)}
-      if(num)num.textContent=Math.min(rem,30);
+      const nd=P.nxDuration||30;
+      if(arc){const circ=2*Math.PI*22;arc.style.strokeDashoffset=((1-Math.min(rem,nd)/nd)*circ).toFixed(1)}
+      if(num)num.textContent=Math.min(rem,nd);
       if(rem<=0)playNext();
     }
   }

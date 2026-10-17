@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, kind TEXT, key TEXT UNI
   runtime INTEGER, cert TEXT, cast_json TEXT DEFAULT '[]', director TEXT, trailer TEXT, added REAL, matched INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS media(id INTEGER PRIMARY KEY, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, path TEXT UNIQUE,
   season INTEGER, episode INTEGER, ep_title TEXT, ep_overview TEXT, still TEXT, air_date TEXT, duration REAL, size INTEGER,
-  probe TEXT, added REAL, subs_checked REAL DEFAULT 0);
+  probe TEXT, added REAL, subs_checked REAL DEFAULT 0, credits_start REAL DEFAULT NULL);
 CREATE TABLE IF NOT EXISTS subtitles(id INTEGER PRIMARY KEY, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE, lang TEXT,
   label TEXT, source TEXT, path TEXT, stream_index INTEGER, UNIQUE(media_id, source, path, stream_index));
 CREATE TABLE IF NOT EXISTS progress(user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
@@ -163,7 +163,8 @@ def init_db():
                            ("users", "email", "TEXT DEFAULT ''"), ("users", "email_ok", "INTEGER DEFAULT 1"),
                            ("users", "active", "INTEGER DEFAULT 1"), ("users", "totp", "TEXT DEFAULT ''"),
                            ("users", "totp_codes", "TEXT DEFAULT ''"), ("users", "signup_ip", "TEXT DEFAULT ''"), ("sessions", "ip", "TEXT"), ("sessions", "ua", "TEXT"),
-                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT")]:
+                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT"),
+                           ("media", "credits_start", "REAL DEFAULT NULL")]:
         if col not in [r[1] for r in c.execute(f"PRAGMA table_info({tbl})")]:
             c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {decl}")
     c.commit()
@@ -765,6 +766,45 @@ def ffprobe(path):
             info["subs"].append({"index": s["index"], "codec": s.get("codec_name"), "lang": lang, "title": tags.get("title", ""),
                                  "forced": bool((s.get("disposition") or {}).get("forced"))})
     return info
+
+
+def detect_credits(path, duration):
+    """Detecteaza inceputul creditelor finale folosind ffprobe blackdetect.
+    Cauta primul black frame din ultimele 5 minute ale fisierului.
+    Returneaza timestamp-ul (float secunde) sau None daca nu gaseste."""
+    if not duration or duration < 120:
+        return None
+    try:
+        # analizam doar ultimele 5 minute (sau tot filmul daca e mai scurt)
+        search_window = min(300, duration * 0.25)
+        start_offset = max(0, duration - search_window)
+        result = subprocess.run([
+            "ffprobe", "-v", "quiet",
+            "-ss", str(start_offset),
+            "-i", path,
+            "-vf", "blackdetect=d=0.5:pix_th=0.10",
+            "-an", "-f", "null", "-"
+        ], capture_output=True, timeout=120, text=True)
+        output = result.stderr
+        # parseaza liniile: [blackdetect @ ...] black_start:123.4 black_end:124.1 black_duration:0.7
+        blacks = []
+        for line in output.splitlines():
+            m = re.search(r"black_start:([\d.]+).*black_end:([\d.]+)", line)
+            if m:
+                bs = float(m.group(1)) + start_offset
+                be = float(m.group(2)) + start_offset
+                blacks.append((bs, be))
+        if not blacks:
+            return None
+        # primul black frame semnificativ (durata > 0.3s) din fereastra de cautare
+        for bs, be in blacks:
+            if (be - bs) >= 0.3 and bs > duration * 0.5:
+                log.info("credits_start detectat la %.1fs (durata totala %.1fs) pentru %s", bs, duration, path)
+                return round(bs, 1)
+        return None
+    except Exception as e:
+        log.warning("detect_credits %s: %s", path, e)
+        return None
 
 
 def os_hash(path):
@@ -2732,11 +2772,39 @@ def next_media(media_id: int, req: Request):
     u = need_user(req)
     m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
     if not m or m["season"] is None:
-        return {"next": None}
+        return {"next": None, "credits_start": None}
     n = q("SELECT * FROM media WHERE item_id=? AND (season>? OR (season=? AND episode>?)) ORDER BY season, episode LIMIT 1",
           (m["item_id"], m["season"], m["season"], m["episode"]), one=True)
+    # returneaza si credits_start pentru episodul curent
+    cs = m["credits_start"] if "credits_start" in m.keys() else None
     return {"next": {"id": n["id"], "season": n["season"], "episode": n["episode"], "title": n["ep_title"] or f"Episodul {n['episode']}",
-                     "still": n["still"]} if n else None}
+                     "still": n["still"]} if n else None,
+            "credits_start": cs}
+
+
+@app.post("/api/media/{media_id}/detect-credits")
+def detect_credits_api(media_id: int, req: Request):
+    """Detecteaza inceputul creditelor finale si salveaza in DB. Ruleaza in background."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
+    if not m:
+        raise HTTPException(404)
+    # daca deja avem rezultat, returnez direct
+    cs = m["credits_start"] if "credits_start" in m.keys() else None
+    if cs is not None:
+        return {"credits_start": cs, "cached": True}
+    # ruleaza detectia in background thread
+    def _run():
+        dur = m["duration"] or 0
+        result = detect_credits(m["path"], dur)
+        if result is None and dur > 120:
+            # fallback: ultimele 30 secunde
+            result = max(0, dur - 30)
+            log.info("credits_start fallback la %.1fs pentru media_id=%d", result, media_id)
+        if result is not None:
+            x("UPDATE media SET credits_start=? WHERE id=?", (result, media_id))
+    threading.Thread(target=_run, daemon=True).start()
+    return {"credits_start": None, "detecting": True}
 
 
 _EP_CACHE = {}
