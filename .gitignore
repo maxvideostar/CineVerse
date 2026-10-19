@@ -5,6 +5,16 @@ __pycache__/
 *.db
 *.log
 transcode/
-outputs/
+outputs/*.apk
+outputs/*.apk.idsig
+outputs/*.exe*
+outputs/*.zip
+outputs/*.ps1
+outputs/*.bat
+outputs/*.ipk
+outputs/*.sh.part*
+outputs/cv-check-live.sh
+outputs/ro-iptv-import.sh
+outputs/cineverse-https*.sh
 # index.html la radacina e copie din static/ folosita de build.sh
 index.html
