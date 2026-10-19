@@ -195,13 +195,14 @@ body.fs .pbot{padding:0 28px 22px}
 .seek:hover .tip{display:flex}
 .seek .tip img{display:block;border-radius:3px;width:160px;height:90px;object-fit:cover;background:#111}
 .seek .tip .tiptime{font-size:13px;font-weight:700;color:#fff;line-height:1;padding:2px 4px}
-.seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
-.seek .left .endtime{font-size:11px;color:rgba(255,255,255,.5);font-weight:500;white-space:nowrap}
+.seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right}
 .pctrl{display:flex;align-items:center;gap:22px}
 .pctrl button svg{width:30px;height:30px;transition:transform .15s}.pctrl button:hover svg{transform:scale(1.2)}
 body.fs .pctrl button svg{width:36px;height:36px}
-.pctrl .ptitle{flex:1;text-align:center;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pctrl .ptitle{flex:1;text-align:center;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;align-items:center;gap:2px}
+.pctrl .ptitle .ptrow1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .pctrl .ptitle b{margin-right:10px}.pctrl .ptitle span{color:#ccc}
+.pctrl .ptitle .ptendtime{font-size:12px;color:rgba(255,255,255,.45);font-weight:500}
 .vol{display:flex;align-items:center;gap:8px}
 .vol input{width:0;opacity:0;transition:all .2s;accent-color:var(--red)}.vol:hover input{width:90px;opacity:1}
 .pspin{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px;border:5px solid rgba(255,255,255,.2);border-top-color:var(--red);border-radius:50%;animation:spin 1s linear infinite;z-index:5}
@@ -1200,7 +1201,7 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   Object.assign(P,{media:mid,mode:d.mode,sid:d.sid,offset:d.offset||0,duration:d.duration,audioList:d.audio,audioIdx:d.audio_index,method:d.method,avail:0,startAt:start,remote:d.remote,quality:d.quality,qualities:d.qualities||[]});
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
-    $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
+    $("#ptitle").innerHTML=`<div class="ptrow1"><b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span></div><span class="ptendtime" id="ptendtime"></span>`;
     const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start!=null?nx.credits_start:undefined;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
     // daca credits_start nu e inca in DB, polleaza pana il obtinem (max 3 min)
@@ -1377,7 +1378,8 @@ function tick(){
     if(!drag){$("#sdone").style.width=(t/D*100)+"%";$("#sknob").style.left=(t/D*100)+"%"}
     let be=0;try{for(let i=0;i<V.buffered.length;i++)if(V.buffered.start(i)<=V.currentTime+1)be=Math.max(be,V.buffered.end(i))}catch(e){}
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
-    const rem=D-t;$("#sleft").innerHTML=`${fmtT(rem)}<span class="endtime">${rem>0?(()=>{const e=new Date(Date.now()+rem*1000);return e.getHours().toString().padStart(2,"0")+":"+e.getMinutes().toString().padStart(2,"0")})():""}</span>`;
+    const rem=D-t;$("#sleft").textContent=fmtT(rem);
+    const etEl=$("#ptendtime");if(etEl&&rem>0){const e=new Date(Date.now()+rem*1000);etEl.textContent="Se termină la "+e.getHours().toString().padStart(2,"0")+":"+e.getMinutes().toString().padStart(2,"0");}else if(etEl){etEl.textContent=""}
     renderSubs();
     // threshold: credits_start din DB (undefined = inca se detecteaza, null = nu exista next ep)
     // fallback la D-30 doar daca nu avem next ep sau durata e mica (evita aparitia prematura)
