@@ -195,7 +195,8 @@ body.fs .pbot{padding:0 28px 22px}
 .seek:hover .tip{display:flex}
 .seek .tip img{display:block;border-radius:3px;width:160px;height:90px;object-fit:cover;background:#111}
 .seek .tip .tiptime{font-size:13px;font-weight:700;color:#fff;line-height:1;padding:2px 4px}
-.seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right}
+.seek .left{margin-left:16px;font-size:15px;min-width:64px;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+.seek .left .endtime{font-size:11px;color:rgba(255,255,255,.5);font-weight:500;white-space:nowrap}
 .pctrl{display:flex;align-items:center;gap:22px}
 .pctrl button svg{width:30px;height:30px;transition:transform .15s}.pctrl button:hover svg{transform:scale(1.2)}
 body.fs .pctrl button svg{width:36px;height:36px}
@@ -1376,7 +1377,7 @@ function tick(){
     if(!drag){$("#sdone").style.width=(t/D*100)+"%";$("#sknob").style.left=(t/D*100)+"%"}
     let be=0;try{for(let i=0;i<V.buffered.length;i++)if(V.buffered.start(i)<=V.currentTime+1)be=Math.max(be,V.buffered.end(i))}catch(e){}
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
-    $("#sleft").textContent=fmtT(D-t);
+    const rem=D-t;$("#sleft").innerHTML=`${fmtT(rem)}<span class="endtime">${rem>0?(()=>{const e=new Date(Date.now()+rem*1000);return e.getHours().toString().padStart(2,"0")+":"+e.getMinutes().toString().padStart(2,"0")})():""}</span>`;
     renderSubs();
     // threshold: credits_start din DB (undefined = inca se detecteaza, null = nu exista next ep)
     // fallback la D-30 doar daca nu avem next ep sau durata e mica (evita aparitia prematura)
