@@ -9,7 +9,7 @@ outputs/*.apk
 outputs/*.apk.idsig
 outputs/*.exe*
 outputs/*.zip
-outputs/*.ps1
+outputs/*.ps1.bak
 outputs/*.bat
 outputs/*.ipk
 outputs/*.sh.part*
