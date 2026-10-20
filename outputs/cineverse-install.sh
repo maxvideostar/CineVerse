@@ -2114,9 +2114,41 @@ async def lifespan(_app):
     yield
 
 
+def _fix_probe_audio_index():
+    """Migrare: reseteaza probe-ul pentru filmele cu audio index=0 dar video index>0.
+    Versiuni vechi salvau indexul audio relativ (0) in loc de absolut (1,2,...).
+    La urmatorul acces, probe-ul se reface automat cu indexul corect."""
+    try:
+        rows = q("SELECT id, probe FROM media WHERE probe IS NOT NULL")
+        fixed = 0
+        for row in rows:
+            try:
+                p = json.loads(row["probe"])
+                v = p.get("video") or {}
+                audio = p.get("audio") or []
+                if not audio or not v:
+                    continue
+                v_idx = v.get("index", 0)
+                # Daca video e la index>0 si toti audio sunt la index 0, probe e gresit
+                if v_idx > 0 and all(a.get("index", 0) == 0 for a in audio):
+                    x("UPDATE media SET probe=NULL WHERE id=?", (row["id"],))
+                    fixed += 1
+                # Daca exista audio cu index <= video index, e suspect
+                elif any(a.get("index", 99) <= v_idx for a in audio):
+                    x("UPDATE media SET probe=NULL WHERE id=?", (row["id"],))
+                    fixed += 1
+            except Exception:
+                pass
+        if fixed:
+            log.info("Migrare probe audio index: %d fisiere resetate pentru re-probe", fixed)
+    except Exception as e:
+        log.warning("_fix_probe_audio_index: %s", e)
+
+
 def _startup():
     global subs_worker
     init_db()
+    _fix_probe_audio_index()
     detect_hw()
     subs_worker = SubsWorker()
     shutil.rmtree(TRANS, ignore_errors=True)
