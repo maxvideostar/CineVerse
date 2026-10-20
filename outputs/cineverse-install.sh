@@ -1988,10 +1988,12 @@ def start_session(media, start, audio_index, user_id, client, force_transcode=Fa
             plans.append(("transcode", "vaapi", start, "sw"))   # daca tonemap_vaapi nu merge: tone-mapping CPU + encodare GPU
     plans.append(("transcode", "none", start, "sw"))
     last_err = ""
+    log.info("start_session: audio_index=%r plans=%s file=%s", audio_index, [(m,h) for m,h,_,_ in plans], Path(media["path"]).name)
     for method, hw, st, tm in plans:
         sid = secrets.token_hex(8)
         s = Session(sid, media["id"], user_id, client)
         cmd = build_cmd(media["path"], info, st, audio_index, method, hw, ql, tm)
+        log.info("ffmpeg cmd: %s", " ".join(cmd))
         cmd += ["-hls_segment_filename", str(s.dir / "s%05d.ts"), str(s.dir / "index.m3u8")]
         errf = open(s.dir / "ffmpeg.log", "wb")
         s.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errf, **popen_kw())
