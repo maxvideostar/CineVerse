@@ -1948,7 +1948,17 @@ def build_cmd(path, info, start, audio_index, method, hw, ql=None, tm_mode="hw")
     if hdr and (hw_tm or sw_tm):
         cmd += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
     if audio_index is not None:
-        cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000"]
+        # Decodor audio explicit pe CPU (necesar pentru E-AC3/AC3/DTS cu hwaccel VAAPI/NVENC)
+        # Fara asta, ffmpeg poate ignora silentios pista audio cu unele codec-uri
+        audio_info = next((a for a in (info.get("audio") or []) if a.get("index") == audio_index), {})
+        acodec = (audio_info.get("codec") or "").lower()
+        if acodec in ("eac3", "ac3", "dts", "truehd", "mlp"):
+            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000",
+                    "-af", "aresample=resampler=swr:async=1"]
+        else:
+            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000"]
+    else:
+        cmd += ["-an"]
     cmd += ["-max_muxing_queue_size", "4096", "-f", "hls", "-hls_time", "6", "-hls_playlist_type", "event", "-hls_list_size", "0",
             "-start_number", "0"]
     return cmd
