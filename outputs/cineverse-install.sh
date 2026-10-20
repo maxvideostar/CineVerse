@@ -238,9 +238,11 @@ _wlock = threading.RLock()
 def db():
     c = getattr(_local, "c", None)
     if c is None:
-        c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        c = sqlite3.connect(DB_PATH, timeout=60, check_same_thread=False)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=30000")
+        c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA foreign_keys=ON")
         _local.c = c
     return c
@@ -2043,6 +2045,30 @@ def periodic_scan():
         scan_library()
 
 
+def file_watcher():
+    """Scanează automat când apar fișiere noi în folderele media (folosește inotifywait dacă e disponibil)."""
+    import shutil
+    if not shutil.which("inotifywait"):
+        return
+    while True:
+        try:
+            dirs = [d.strip() for d in (S("media_dirs") or "").split(";") if d.strip() and Path(d.strip()).is_dir()]
+            if not dirs:
+                time.sleep(30)
+                continue
+            subprocess.run(
+                ["inotifywait", "-r", "-e", "create,moved_to,close_write", "--format", "%w%f", "-q"] + dirs,
+                capture_output=True, timeout=300
+            )
+            time.sleep(3)  # asteapta sa se termine copierea
+            scan_async()
+        except subprocess.TimeoutExpired:
+            pass  # normal – reincearca
+        except Exception as e:
+            log.warning("file_watcher: %s", e)
+            time.sleep(30)
+
+
 # ---------------------------------------------------------------- serializare
 def card(it, extra=None):
     d = {"id": it["id"], "kind": it["kind"], "title": it["title"], "year": it["year"], "poster": it["poster"], "backdrop": it["backdrop"],
@@ -2091,6 +2117,7 @@ def _startup():
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=periodic_scan, daemon=True).start()
     threading.Thread(target=credits_backfill, daemon=True).start()
+    threading.Thread(target=file_watcher, daemon=True).start()
 
 
 app = FastAPI(title="CineVerse by NetStreaming", docs_url=None, redoc_url=None, lifespan=lifespan)
