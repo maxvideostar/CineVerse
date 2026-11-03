@@ -90,11 +90,9 @@ _wlock = threading.RLock()
 def db():
     c = getattr(_local, "c", None)
     if c is None:
-        c = sqlite3.connect(DB_PATH, timeout=60, check_same_thread=False)
+        c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA busy_timeout=30000")
-        c.execute("PRAGMA synchronous=NORMAL")
         c.execute("PRAGMA foreign_keys=ON")
         _local.c = c
     return c
@@ -123,7 +121,7 @@ CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, kind TEXT, key TEXT UNI
   runtime INTEGER, cert TEXT, cast_json TEXT DEFAULT '[]', director TEXT, trailer TEXT, added REAL, matched INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS media(id INTEGER PRIMARY KEY, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, path TEXT UNIQUE,
   season INTEGER, episode INTEGER, ep_title TEXT, ep_overview TEXT, still TEXT, air_date TEXT, duration REAL, size INTEGER,
-  probe TEXT, added REAL, subs_checked REAL DEFAULT 0, credits_start REAL DEFAULT NULL);
+  probe TEXT, added REAL, subs_checked REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS subtitles(id INTEGER PRIMARY KEY, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE, lang TEXT,
   label TEXT, source TEXT, path TEXT, stream_index INTEGER, UNIQUE(media_id, source, path, stream_index));
 CREATE TABLE IF NOT EXISTS progress(user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
@@ -165,8 +163,7 @@ def init_db():
                            ("users", "email", "TEXT DEFAULT ''"), ("users", "email_ok", "INTEGER DEFAULT 1"),
                            ("users", "active", "INTEGER DEFAULT 1"), ("users", "totp", "TEXT DEFAULT ''"),
                            ("users", "totp_codes", "TEXT DEFAULT ''"), ("users", "signup_ip", "TEXT DEFAULT ''"), ("sessions", "ip", "TEXT"), ("sessions", "ua", "TEXT"),
-                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT"),
-                           ("media", "credits_start", "REAL DEFAULT NULL")]:
+                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT")]:
         if col not in [r[1] for r in c.execute(f"PRAGMA table_info({tbl})")]:
             c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {decl}")
     c.commit()
@@ -546,7 +543,14 @@ def lan_nets():
 
 
 def client_ip(req: Request):
-    return req.client.host if req.client else "127.0.0.1"
+    # Daca requestul vine de la localhost (nginx reverse proxy), folosim X-Real-IP
+    # Asta permite detectia corecta LAN/remote pentru useri care acceseaza prin domeniu
+    raw = req.client.host if req.client else "127.0.0.1"
+    if raw in ("127.0.0.1", "::1"):
+        hdr = req.headers.get("x-real-ip") or req.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if hdr:
+            return hdr
+    return raw
 
 
 _srv_nets = {"t": 0, "nets": []}
@@ -768,45 +772,6 @@ def ffprobe(path):
             info["subs"].append({"index": s["index"], "codec": s.get("codec_name"), "lang": lang, "title": tags.get("title", ""),
                                  "forced": bool((s.get("disposition") or {}).get("forced"))})
     return info
-
-
-def detect_credits(path, duration):
-    """Detecteaza inceputul creditelor finale folosind ffprobe blackdetect.
-    Cauta primul black frame din ultimele 5 minute ale fisierului.
-    Returneaza timestamp-ul (float secunde) sau None daca nu gaseste."""
-    if not duration or duration < 120:
-        return None
-    try:
-        # analizam doar ultimele 5 minute (sau tot filmul daca e mai scurt)
-        search_window = min(300, duration * 0.25)
-        start_offset = max(0, duration - search_window)
-        result = subprocess.run([
-            "ffprobe", "-v", "quiet",
-            "-ss", str(start_offset),
-            "-i", path,
-            "-vf", "blackdetect=d=0.5:pix_th=0.10",
-            "-an", "-f", "null", "-"
-        ], capture_output=True, timeout=120, text=True)
-        output = result.stderr
-        # parseaza liniile: [blackdetect @ ...] black_start:123.4 black_end:124.1 black_duration:0.7
-        blacks = []
-        for line in output.splitlines():
-            m = re.search(r"black_start:([\d.]+).*black_end:([\d.]+)", line)
-            if m:
-                bs = float(m.group(1)) + start_offset
-                be = float(m.group(2)) + start_offset
-                blacks.append((bs, be))
-        if not blacks:
-            return None
-        # primul black frame semnificativ (durata > 0.3s) din fereastra de cautare
-        for bs, be in blacks:
-            if (be - bs) >= 0.3 and bs > duration * 0.5:
-                log.info("credits_start detectat la %.1fs (durata totala %.1fs) pentru %s", bs, duration, path)
-                return round(bs, 1)
-        return None
-    except Exception as e:
-        log.warning("detect_credits %s: %s", path, e)
-        return None
 
 
 def os_hash(path):
@@ -1254,16 +1219,11 @@ def scan_library():
                 g = guess(p, found[p])
                 info = ffprobe(p)
                 item_id = get_item_for(g)
-                dur = (info or {}).get("duration") or 0
                 mid = x("INSERT INTO media(item_id,path,season,episode,duration,size,probe,added) VALUES(?,?,?,?,?,?,?,?)",
-                        (item_id, p, g.get("season"), g.get("episode"), dur, os.path.getsize(p),
+                        (item_id, p, g.get("season"), g.get("episode"), (info or {}).get("duration") or 0, os.path.getsize(p),
                          json.dumps(info), time.time()))
                 find_local_subs(mid, p)
                 add_embedded_subs(mid, info)
-                # detectie credite in background (nu blocheaza scanarea)
-                if g.get("season") is not None and dur > 120:
-                    _mid, _p, _dur = mid, p, dur
-                    threading.Thread(target=lambda m=_mid,f=_p,d=_dur: x("UPDATE media SET credits_start=? WHERE id=?", (detect_credits(f,d) or max(0,d-30), m)), daemon=True).start()
                 x("UPDATE items SET added=? WHERE id=?", (time.time(), item_id))
             except Exception as e:
                 log.exception("scan %s: %s", p, e)
@@ -1800,17 +1760,7 @@ def build_cmd(path, info, start, audio_index, method, hw, ql=None, tm_mode="hw")
     if hdr and (hw_tm or sw_tm):
         cmd += ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
     if audio_index is not None:
-        # Decodor audio explicit pe CPU (necesar pentru E-AC3/AC3/DTS cu hwaccel VAAPI/NVENC)
-        # Fara asta, ffmpeg poate ignora silentios pista audio cu unele codec-uri
-        audio_info = next((a for a in (info.get("audio") or []) if a.get("index") == audio_index), {})
-        acodec = (audio_info.get("codec") or "").lower()
-        if acodec in ("eac3", "ac3", "dts", "truehd", "mlp"):
-            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000",
-                    "-af", "aresample=resampler=swr:async=1"]
-        else:
-            cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000"]
-    else:
-        cmd += ["-an"]
+        cmd += ["-c:a", "aac", "-ac", "2", "-b:a", f"{abr}k", "-ar", "48000"]
     cmd += ["-max_muxing_queue_size", "4096", "-f", "hls", "-hls_time", "6", "-hls_playlist_type", "event", "-hls_list_size", "0",
             "-start_number", "0"]
     return cmd
@@ -1840,12 +1790,10 @@ def start_session(media, start, audio_index, user_id, client, force_transcode=Fa
             plans.append(("transcode", "vaapi", start, "sw"))   # daca tonemap_vaapi nu merge: tone-mapping CPU + encodare GPU
     plans.append(("transcode", "none", start, "sw"))
     last_err = ""
-    log.info("start_session: audio_index=%r plans=%s file=%s", audio_index, [(m,h) for m,h,_,_ in plans], Path(media["path"]).name)
     for method, hw, st, tm in plans:
         sid = secrets.token_hex(8)
         s = Session(sid, media["id"], user_id, client)
         cmd = build_cmd(media["path"], info, st, audio_index, method, hw, ql, tm)
-        log.info("ffmpeg cmd: %s", " ".join(cmd))
         cmd += ["-hls_segment_filename", str(s.dir / "s%05d.ts"), str(s.dir / "index.m3u8")]
         errf = open(s.dir / "ffmpeg.log", "wb")
         s.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errf, **popen_kw())
@@ -1909,30 +1857,6 @@ def periodic_scan():
         scan_library()
 
 
-def file_watcher():
-    """Scanează automat când apar fișiere noi în folderele media (folosește inotifywait dacă e disponibil)."""
-    import shutil
-    if not shutil.which("inotifywait"):
-        return
-    while True:
-        try:
-            dirs = [d.strip() for d in (S("media_dirs") or "").split(";") if d.strip() and Path(d.strip()).is_dir()]
-            if not dirs:
-                time.sleep(30)
-                continue
-            subprocess.run(
-                ["inotifywait", "-r", "-e", "create,moved_to,close_write", "--format", "%w%f", "-q"] + dirs,
-                capture_output=True, timeout=300
-            )
-            time.sleep(3)  # asteapta sa se termine copierea
-            scan_async()
-        except subprocess.TimeoutExpired:
-            pass  # normal – reincearca
-        except Exception as e:
-            log.warning("file_watcher: %s", e)
-            time.sleep(30)
-
-
 # ---------------------------------------------------------------- serializare
 def card(it, extra=None):
     d = {"id": it["id"], "kind": it["kind"], "title": it["title"], "year": it["year"], "poster": it["poster"], "backdrop": it["backdrop"],
@@ -1966,41 +1890,9 @@ async def lifespan(_app):
     yield
 
 
-def _fix_probe_audio_index():
-    """Migrare: reseteaza probe-ul pentru filmele cu audio index=0 dar video index>0.
-    Versiuni vechi salvau indexul audio relativ (0) in loc de absolut (1,2,...).
-    La urmatorul acces, probe-ul se reface automat cu indexul corect."""
-    try:
-        rows = q("SELECT id, probe FROM media WHERE probe IS NOT NULL")
-        fixed = 0
-        for row in rows:
-            try:
-                p = json.loads(row["probe"])
-                v = p.get("video") or {}
-                audio = p.get("audio") or []
-                if not audio or not v:
-                    continue
-                v_idx = v.get("index", 0)
-                # Daca video e la index>0 si toti audio sunt la index 0, probe e gresit
-                if v_idx > 0 and all(a.get("index", 0) == 0 for a in audio):
-                    x("UPDATE media SET probe=NULL WHERE id=?", (row["id"],))
-                    fixed += 1
-                # Daca exista audio cu index <= video index, e suspect
-                elif any(a.get("index", 99) <= v_idx for a in audio):
-                    x("UPDATE media SET probe=NULL WHERE id=?", (row["id"],))
-                    fixed += 1
-            except Exception:
-                pass
-        if fixed:
-            log.info("Migrare probe audio index: %d fisiere resetate pentru re-probe", fixed)
-    except Exception as e:
-        log.warning("_fix_probe_audio_index: %s", e)
-
-
 def _startup():
     global subs_worker
     init_db()
-    _fix_probe_audio_index()
     detect_hw()
     subs_worker = SubsWorker()
     shutil.rmtree(TRANS, ignore_errors=True)
@@ -2012,8 +1904,6 @@ def _startup():
     threading.Thread(target=live_refresher, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=periodic_scan, daemon=True).start()
-    threading.Thread(target=credits_backfill, daemon=True).start()
-    threading.Thread(target=file_watcher, daemon=True).start()
 
 
 app = FastAPI(title="CineVerse by NetStreaming", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -2844,73 +2734,16 @@ async def mark_watched(media_id: int, req: Request):
     return {"ok": True}
 
 
-THUMB_DIR = DATA / "thumbs"
-THUMB_DIR.mkdir(exist_ok=True)
-
-@app.get("/api/media/{media_id}/thumb")
-def media_thumb(media_id: int, t: float, req: Request):
-    """Returneaza un frame JPEG la timestamp t (secunde) din fisierul media."""
-    u = need_user(req)
-    m = need_media(u, q("SELECT path, duration FROM media WHERE id=?", (media_id,), one=True))
-    if not m:
-        raise HTTPException(404)
-    # cache: un fisier per (media_id, t rotunjit la 5s)
-    ts = round(t / 5) * 5
-    cache_path = THUMB_DIR / f"{media_id}_{ts}.jpg"
-    if not cache_path.exists():
-        try:
-            subprocess.run([
-                "ffmpeg", "-y", "-ss", str(ts), "-i", m["path"],
-                "-vframes", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
-                "-q:v", "5", str(cache_path)
-            ], capture_output=True, timeout=10)
-        except Exception as e:
-            log.warning("thumb %s@%s: %s", media_id, ts, e)
-            raise HTTPException(500)
-    if not cache_path.exists():
-        raise HTTPException(404)
-    return FileResponse(str(cache_path), media_type="image/jpeg",
-                        headers={"Cache-Control": "max-age=3600"})
-
-
 @app.get("/api/media/{media_id}/next")
 def next_media(media_id: int, req: Request):
     u = need_user(req)
     m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
     if not m or m["season"] is None:
-        return {"next": None, "credits_start": None}
+        return {"next": None}
     n = q("SELECT * FROM media WHERE item_id=? AND (season>? OR (season=? AND episode>?)) ORDER BY season, episode LIMIT 1",
           (m["item_id"], m["season"], m["season"], m["episode"]), one=True)
-    # returneaza si credits_start pentru episodul curent
-    cs = m["credits_start"] if "credits_start" in m.keys() else None
     return {"next": {"id": n["id"], "season": n["season"], "episode": n["episode"], "title": n["ep_title"] or f"Episodul {n['episode']}",
-                     "still": n["still"]} if n else None,
-            "credits_start": cs}
-
-
-@app.post("/api/media/{media_id}/detect-credits")
-def detect_credits_api(media_id: int, req: Request):
-    """Detecteaza inceputul creditelor finale si salveaza in DB. Ruleaza in background."""
-    u = need_user(req)
-    m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
-    if not m:
-        raise HTTPException(404)
-    # daca deja avem rezultat, returnez direct
-    cs = m["credits_start"] if "credits_start" in m.keys() else None
-    if cs is not None:
-        return {"credits_start": cs, "cached": True}
-    # ruleaza detectia in background thread
-    def _run():
-        dur = m["duration"] or 0
-        result = detect_credits(m["path"], dur)
-        if result is None and dur > 120:
-            # fallback: ultimele 30 secunde
-            result = max(0, dur - 30)
-            log.info("credits_start fallback la %.1fs pentru media_id=%d", result, media_id)
-        if result is not None:
-            x("UPDATE media SET credits_start=? WHERE id=?", (result, media_id))
-    threading.Thread(target=_run, daemon=True).start()
-    return {"credits_start": None, "detecting": True}
+                     "still": n["still"]} if n else None}
 
 
 _EP_CACHE = {}
@@ -3541,7 +3374,6 @@ LIVE = {}            # (channel_id, variant) -> LiveSession
 LIVE_LOCK = threading.RLock()
 LIVE_TOKENS = {}     # token Chromecast -> (channel_id, variant)
 EPG_STATE = {"running": False, "last": 0, "count": 0, "err": ""}
-CH_CHECK_STATE = {"running": False, "last": 0, "done": 0, "total": 0, "disabled": 0, "err": ""}
 
 
 def live_probe(url, ua=""):
@@ -4081,59 +3913,6 @@ def refresh_epg():
         EPG_STATE["running"] = False
 
 
-def run_channel_check(only_enabled=True):
-    """Testează toate canalele cu ffprobe și dezactivează cele care nu răspund."""
-    if CH_CHECK_STATE["running"]:
-        return
-    CH_CHECK_STATE.update(running=True, err="", done=0, disabled=0)
-    try:
-        filt = "WHERE enabled=1" if only_enabled else ""
-        chs = q(f"SELECT * FROM live_channels {filt} ORDER BY COALESCE(num,99999)")
-        CH_CHECK_STATE["total"] = len(chs)
-        disabled = 0
-        for ch in chs:
-            try:
-                pr = live_probe(ch["url"], ch["ua"] or "")
-                x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps({**pr, "t": time.time()}), ch["id"]))
-                if not pr.get("ok"):
-                    x("UPDATE live_channels SET enabled=0 WHERE id=?", (ch["id"],))
-                    # opreste sesiunea live daca e pornita
-                    for k in list(LIVE.keys()):
-                        if k[0] == ch["id"]:
-                            try: LIVE[k].stop()
-                            except: pass
-                    disabled += 1
-            except Exception as e:
-                log.warning("ch_check canal %s: %s", ch["name"], e)
-            CH_CHECK_STATE["done"] += 1
-            CH_CHECK_STATE["disabled"] = disabled
-        CH_CHECK_STATE["last"] = time.time()
-        log.info("Verificare canale: %d testate, %d dezactivate", len(chs), disabled)
-    except Exception as e:
-        CH_CHECK_STATE["err"] = str(e)[:200]
-        log.warning("run_channel_check: %s", e)
-    finally:
-        CH_CHECK_STATE["running"] = False
-
-
-def credits_backfill():
-    """La pornire, detecteaza credits_start pentru episoadele care nu au inca valoarea."""
-    time.sleep(30)  # asteapta serverul sa porneasca complet
-    rows = q("SELECT id, path, duration FROM media WHERE season IS NOT NULL AND credits_start IS NULL AND duration > 120")
-    if not rows:
-        return
-    log.info("credits_backfill: %d episoade fara credits_start detectat", len(rows))
-    for r in rows:
-        try:
-            cs = detect_credits(r["path"], r["duration"])
-            if cs is None:
-                cs = max(0, r["duration"] - 30)
-            x("UPDATE media SET credits_start=? WHERE id=?", (cs, r["id"]))
-        except Exception as e:
-            log.warning("credits_backfill %s: %s", r["path"], e)
-    log.info("credits_backfill: finalizat")
-
-
 def live_refresher():
     time.sleep(20)
     while True:
@@ -4144,10 +3923,6 @@ def live_refresher():
                     refresh_playlist(pl["id"])
             if S("epg_urls") and time.time() - EPG_STATE["last"] > 6 * 3600:
                 refresh_epg()
-            # verificare automata canale – o data pe zi, noaptea
-            check_iv = 86400  # 24h
-            if time.time() - CH_CHECK_STATE["last"] > check_iv and not CH_CHECK_STATE["running"]:
-                threading.Thread(target=run_channel_check, daemon=True).start()
         except Exception as e:
             log.warning("live refresher: %s", e)
         time.sleep(600)
@@ -4230,29 +4005,6 @@ async def admin_live_playlist(req: Request):
     return {"ok": True, "count": r["count"]}
 
 
-@app.post("/api/admin/live/playlist/upload")
-async def admin_live_playlist_upload(req: Request):
-    """Primește fișier .m3u ca flux brut și îl importă ca playlist nou."""
-    need_admin(req)
-    name = req.headers.get("X-Playlist-Name", "Fișier M3U")[:60]
-    total = 0
-    chunks = []
-    async for chunk in req.stream():
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > 50 * 1024 * 1024:
-            raise HTTPException(413, "Fișier prea mare (max 50 MB)")
-    if not total:
-        raise HTTPException(400, "Fișier gol")
-    text = b"".join(chunks).decode("utf-8", errors="replace")
-    if "#EXTM3U" not in text and "#EXTINF" not in text:
-        raise HTTPException(400, "Nu pare un fișier M3U valid")
-    pid = x("INSERT INTO live_playlists(url,name,last,count) VALUES('',?,?,0)", (name, time.time()))
-    n = import_m3u(pid, text)
-    x("UPDATE live_playlists SET count=? WHERE id=?", (n, pid))
-    return {"ok": True, "count": n}
-
-
 @app.post("/api/admin/live/playlist/{pid}/refresh")
 async def admin_live_pl_refresh(pid: int, req: Request):
     need_admin(req)
@@ -4278,25 +4030,6 @@ async def admin_live_epg(req: Request):
         set_S("epg_urls", d["urls"].strip())
     threading.Thread(target=refresh_epg, daemon=True).start()
     return {"ok": True}
-
-
-@app.post("/api/admin/live/check")
-async def admin_live_check(req: Request):
-    """Porneste verificarea manuala a tuturor canalelor."""
-    need_admin(req)
-    if CH_CHECK_STATE["running"]:
-        return {"ok": False, "msg": "Verificare deja în curs"}
-    d = await req.json()
-    only_enabled = d.get("only_enabled", True)
-    threading.Thread(target=run_channel_check, args=(only_enabled,), daemon=True).start()
-    return {"ok": True}
-
-
-@app.get("/api/admin/live/check")
-def admin_live_check_status(req: Request):
-    """Status curent al verificarii."""
-    need_admin(req)
-    return dict(CH_CHECK_STATE)
 
 
 # ---------------------------------------------------------------- monitorizare sistem
