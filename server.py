@@ -614,6 +614,22 @@ def server_nets():
     return nets
 
 
+_pub_ip_cache = {"t": 0, "ip": None}
+
+def _server_public_ip():
+    """Returneaza IP-ul public al serverului (cu cache 5 min) pentru detectia NAT hairpin."""
+    if time.time() - _pub_ip_cache["t"] < 300:
+        return _pub_ip_cache["ip"]
+    import urllib.request
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=3) as r:
+            ip = r.read().decode().strip()
+            _pub_ip_cache.update(t=time.time(), ip=ip)
+            return ip
+    except Exception:
+        _pub_ip_cache["t"] = time.time()
+        return None
+
 def is_remote(req: Request):
     try:
         ip = ipaddress.ip_address(client_ip(req))
@@ -622,7 +638,17 @@ def is_remote(req: Request):
     if ip.version == 6 and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
     nets = lan_nets() + (server_nets() if S("lan_auto") == "1" else [])
-    return not any(ip.version == n.version and ip in n for n in nets)
+    if any(ip.version == n.version and ip in n for n in nets):
+        return False
+    # NAT hairpin: clientul apare cu IP-ul public al serverului
+    pub = _server_public_ip()
+    if pub:
+        try:
+            if ip == ipaddress.ip_address(pub):
+                return False
+        except ValueError:
+            pass
+    return True
 
 
 def remote_max_bps():
