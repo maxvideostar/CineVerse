@@ -3017,6 +3017,18 @@ def local_ip_for(host):
         s_.close()
 
 
+def _local_server_ip():
+    """Returneaza IP-ul local al serverului (folosit pentru URL-urile CAF sender)."""
+    s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s_.connect(("8.8.8.8", 80))
+        return s_.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s_.close()
+
+
 class CastStream:
     """HLS 'VOD' sintetic pentru Chromecast: playlist complet (0..durata), segmente de 6s generate la cerere.
     La un salt departe, ffmpeg reporneste exact de la segmentul cerut (timestamp-uri aliniate)."""
@@ -3779,6 +3791,126 @@ async def cast_live(req: Request):
     d = await req.json()
     a = await asyncio.to_thread(cast_start_live, u["id"], str(d["device"]), int(d["channel"]))
     return {"ok": True, "device": a["device_name"]}
+
+
+# ---- CAF Sender endpoints: browser-ul controleaza direct Chromecast-ul ----
+
+def _caf_stream_start(uid, media_id, start, audio, sub_id):
+    """Porneste transcodarea si returneaza URL-ul HLS (fara sa controleze Chromecast)."""
+    m = q("SELECT m.*, i.title AS it_title, i.kind, i.poster, i.backdrop, i.year FROM media m JOIN items i ON i.id=m.item_id WHERE m.id=?",
+          (media_id,), one=True)
+    if not m or not os.path.exists(m["path"]):
+        raise HTTPException(404, "Fișierul nu există")
+    info = json.loads(m["probe"] or "{}") or ffprobe(m["path"]) or {}
+    auds = info.get("audio", [])
+    if audio is None and auds:
+        audio = (next((a_ for a_ in auds if is_ro(a_["lang"])), None) or next((a_ for a_ in auds if a_["default"]), None) or auds[0])["index"]
+    alang = next((a_["lang"] for a_ in auds if a_["index"] == audio), "")
+    if sub_id == "auto":
+        sub_id = pick_ro_sub(media_id, alang)
+    tok = secrets.token_urlsafe(18)
+    st = CastStream(tok, m, info, audio, uid, sub_id)
+    n0 = int(max(0, start) // SEG)
+    if not st.start_at(n0):
+        st.cleanup()
+        raise HTTPException(500, "Transcodarea pentru Cast a eșuat")
+    CAST_STREAMS[tok] = st
+    # folosim IP-ul local al serverului (nu al Chromecast-ului — browserul se va conecta)
+    local_ip = _local_server_ip()
+    base = f"http://{local_ip}:{HTTP_PORT}/cast/{tok}"
+    sub_url = f"{base}/sub.vtt" if sub_id else None
+    thumb_url = f"{base}/image.jpg" if (m["still"] or m["backdrop"] or m["poster"]) else None
+    if m["kind"] == "series":
+        kind = "series"
+        title = m["ep_title"] or f"Episodul {m['episode']}"
+        series_title = m["it_title"]
+        full = f"{series_title} – S{m['season']}:E{m['episode']} {title}".strip()
+    else:
+        kind = "movie"
+        title = m["it_title"]
+        series_title = None
+        full = title
+    un = (q("SELECT username FROM users WHERE id=?", (uid,), one=True) or {"username": "?"})["username"]
+    lid = x("""INSERT INTO play_log(user_id,username,media_id,title,client,device,ip,remote,method,quality,started,ended,watched,last_pos,duration)
+        VALUES(?,?,?,?,?,?,?,0,?,?,?,?,0,?,?)""", (uid, un, media_id, full, "cast-caf", "Chromecast (CAF)", "rețea locală",
+                                                   st.method, "LAN", time.time(), time.time(), start, st.duration))
+    # salvam in CAST_ACTIVE pentru compatibilitate cu /api/cast/status si progress
+    CAST_ACTIVE[uid] = {"log_id": lid, "last_tick": time.time(), "caf": True,
+                        "device": "caf", "device_name": "Chromecast (CAF)", "token": tok, "media_id": media_id,
+                        "item_id": m["item_id"], "audio": audio, "sub_id": sub_id,
+                        "duration": st.duration, "title": full, "img": m["still"] or m["backdrop"] or m["poster"],
+                        "started": time.time(), "pos": start}
+    return {"url": f"{base}/index.m3u8", "token": tok, "title": title, "kind": kind,
+            "series_title": series_title, "season": m.get("season"), "episode": m.get("episode"),
+            "thumb": thumb_url, "year": m.get("year"), "sub_url": sub_url,
+            "start_time": float(start), "duration": st.duration, "item_id": m["item_id"]}
+
+
+@app.post("/api/cast/stream")
+async def caf_stream(req: Request):
+    """CAF Sender: porneste transcodarea si returneaza URL HLS pentru browser → Chromecast direct."""
+    u = need_lan_user(req)
+    d = await req.json()
+    need_media(u, q("SELECT path FROM media WHERE id=?", (int(d["media_id"]),), one=True))
+    return await asyncio.to_thread(_caf_stream_start, u["id"], int(d["media_id"]),
+                                   float(d.get("start") or 0), d.get("audio"), d.get("sub", "auto"))
+
+
+@app.post("/api/cast/stream/live")
+async def caf_stream_live(req: Request):
+    """CAF Sender: returneaza URL HLS live pentru browser → Chromecast direct."""
+    u = need_lan_user(req)
+    if not u["live_ok"]:
+        raise HTTPException(403, "Contul tău nu are acces la TV Live")
+    d = await req.json()
+    cid = int(d["channel"])
+    ch = q("SELECT * FROM live_channels WHERE id=? AND enabled=1", (cid,), one=True)
+    if not ch:
+        raise HTTPException(404, "Canal inexistent")
+    ls = live_session(ch, "orig")
+    tok = secrets.token_urlsafe(18)
+    LIVE_TOKENS[tok] = (ch["id"], "orig")
+    local_ip = _local_server_ip()
+    base = f"http://{local_ip}:{HTTP_PORT}/cast/live/{tok}"
+    thumb_url = f"{base}/logo" if ch["logo"] else None
+    un = (q("SELECT username FROM users WHERE id=?", (u["id"],), one=True) or {"username": "?"})["username"]
+    lid = x("""INSERT INTO play_log(user_id,username,media_id,title,client,device,ip,remote,method,quality,started,ended,watched,last_pos,duration)
+        VALUES(?,?,NULL,?,?,?,?,0,?,?,?,?,0,0,0)""", (u["id"], un, f"📺 {ch['name']}", "cast-caf",
+                                                       "Chromecast (CAF)", "rețea locală", ls.method, "LAN",
+                                                       time.time(), time.time()))
+    CAST_ACTIVE[u["id"]] = {"live": True, "caf": True, "channel": ch["id"], "device": "caf",
+                             "device_name": "Chromecast (CAF)", "token": tok,
+                             "title": f"📺 {ch['name']}", "logo": bool(ch["logo"]),
+                             "started": time.time(), "log_id": lid, "last_tick": time.time(),
+                             "media_id": None, "item_id": None, "img": None, "duration": 0}
+    return {"url": f"{base}/index.m3u8", "token": tok, "title": ch["name"], "thumb": thumb_url}
+
+
+@app.post("/api/cast/progress")
+async def caf_progress(req: Request):
+    """CAF Sender: browserul raporteaza pozitia curenta (pentru resume si log)."""
+    u = need_user(req)
+    d = await req.json()
+    tok = d.get("token", "")
+    pos = float(d.get("pos") or 0)
+    done = bool(d.get("done"))
+    a = CAST_ACTIVE.get(u["id"])
+    if a and a.get("token") == tok:
+        a["last_tick"] = time.time()
+        a["pos"] = pos
+        if a.get("log_id"):
+            x("UPDATE play_log SET ended=?, last_pos=?, watched=MIN(duration, watched+5) WHERE id=?",
+              (time.time(), pos, a["log_id"]))
+        if done:
+            dur = a.get("duration", 0)
+            mid = a.get("media_id")
+            if mid and dur and pos > 10:
+                save_progress(u["id"], mid, pos, dur)
+            CAST_ACTIVE.pop(u["id"], None)
+            st = CAST_STREAMS.pop(tok, None)
+            if st:
+                st.cleanup()
+    return {"ok": True}
 
 
 @app.options("/cast/live/{token}/{name}")
