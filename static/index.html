@@ -679,11 +679,12 @@ const CAST={devices:[],device:null,name:"",st:null,timer:null,scanT:null,drag:fa
 /* ==================== CAST HIBRID: CAF (browser) + pychromecast (PWA/TV) ==================== */
 const CAST_APP_ID = "BEE3563A";
 let castCtx = null, castSession = null;
-const _isPWA = () => window.matchMedia('(display-mode: standalone)').matches || !!window.navigator.standalone;
+// _isPWA: true daca SDK-ul Cast NU e disponibil (PWA, Android TV, etc)
+const _isPWA = () => !castCtx;
 
 // ---- CAF Sender (doar in browser Chrome, nu in PWA) ----
 window["__onGCastApiAvailable"] = function(isAvailable) {
-  if(!isAvailable || _isPWA()) return;  // PWA foloseste pychromecast
+  if(!isAvailable) return;
   castCtx = cast.framework.CastContext.getInstance();
   castCtx.setOptions({
     receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
@@ -738,9 +739,11 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
 
 // ---- pychromecast (PWA / Android TV) ----
 async function castRefresh(){
-  if(_isPWA() && ME && !ME.remote){
-    // in PWA folosim server-side cast (pychromecast)
-    try{const d=await api("/api/cast/devices"); CAST.devices=d.devices||[]}catch(e){CAST.devices=[]}
+  if(ME && !ME.remote){
+    if(_isPWA()){
+      // fara CAF SDK — folosim server-side cast (pychromecast)
+      try{const d=await api("/api/cast/devices"); CAST.devices=d.devices||[]}catch(e){CAST.devices=[]}
+    }
   }
   updCastBtns();
 }
