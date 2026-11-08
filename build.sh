@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 # sincronizeaza index.html din static/ in radacina (folosit de build)
 cp static/index.html index.html
-OUT=/home/claude/outputs/cineverse-install.sh
+OUT="$(dirname "$0")/outputs/cineverse-install.sh"
 
 # verificari de siguranta pentru heredoc-uri
 for f in server.py index.html; do
