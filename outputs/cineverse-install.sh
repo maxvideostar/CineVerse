@@ -2976,6 +2976,26 @@ def media_details(media_id: int, req: Request):
     return d
 
 
+@app.get("/api/media/{media_id}/thumb")
+def media_thumb(media_id: int, t: float = 0, req: Request = None):
+    """Thumbnail preview pentru seek bar — extrage un frame la secunda t cu ffmpeg."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT path FROM media WHERE id=?", (media_id,), one=True))
+    if not m or not os.path.exists(m["path"]):
+        raise HTTPException(404)
+    try:
+        cmd = ["ffmpeg", "-ss", str(max(0, t)), "-i", m["path"],
+               "-vframes", "1", "-vf", "scale=170:-1",
+               "-f", "image2", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1"]
+        result = subprocess.run(cmd, capture_output=True, timeout=5)
+        if result.returncode != 0 or not result.stdout:
+            raise HTTPException(404)
+        return Response(content=result.stdout, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600"})
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504)
+
+
 @app.get("/api/media/{media_id}/info")
 def media_info(media_id: int, req: Request):
     u = need_user(req)
