@@ -734,18 +734,21 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
   ctrl.addEventListener(cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED, () => {
     if(document.activeElement !== $("#cbvol")) $("#cbvol").value = player.volumeLevel;
   });
+  // actualizeaza butonul cand se schimba starea Cast (gasit/negasit dispozitiv)
+  castCtx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, () => updCastBtns());
   CAST._player = player; CAST._ctrl = ctrl;
   updCastBtns();
 };
 
 async function castRefresh(){
-  if(!ME||ME.remote){ updCastBtns(); return; }
   updCastBtns();
 }
 function updCastBtns(){
-  const show = CAST.connected || (castCtx && castCtx.getCastState() !== cast.framework.CastState.NO_DEVICES_AVAILABLE);
+  // Afisam butonul Cast daca: suntem pe LAN (ME && !ME.remote) SAU deja conectat
+  const lan = ME && !ME.remote;
+  const show = lan || CAST.connected;
   ["#castbtn","#pcast"].forEach(sel=>{const b=$(sel);if(!b)return;
-    b.classList.toggle("hidden", !show && !CAST.connected);
+    b.classList.toggle("hidden", !show);
     b.classList.toggle("on", !!CAST.connected);
     b.querySelector("use").setAttribute("href", CAST.connected ? "#i-cast-on" : "#i-cast");
     b.title = CAST.connected ? `Conectat la ${CAST.name}` : "Redă pe TV (Google Cast)";
