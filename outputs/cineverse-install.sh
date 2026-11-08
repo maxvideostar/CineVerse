@@ -6202,7 +6202,7 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
   if(!isAvailable) return;
   castCtx = cast.framework.CastContext.getInstance();
   castCtx.setOptions({
-    receiverApplicationId: CAST_APP_ID,
+    receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
     autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
     resumeSavedSession: true
   });
