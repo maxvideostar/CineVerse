@@ -676,13 +676,14 @@ let RESET_TOK="";
 async function logout(){await api("/api/logout",{method:"POST"}).catch(()=>{});ME=null;clearTimeout(expT);location.hash="#/";showLogin()}
 /* ================= GOOGLE CAST (serverul comandă Chromecast-ul) ================= */
 const CAST={devices:[],device:null,name:"",st:null,timer:null,scanT:null,drag:false,connected:false,mediaToken:null,mediaId:null,itemId:null,_player:null,_ctrl:null};
-/* ==================== CAST CAF SENDER ==================== */
+/* ==================== CAST HIBRID: CAF (browser) + pychromecast (PWA/TV) ==================== */
 const CAST_APP_ID = "BEE3563A";
 let castCtx = null, castSession = null;
+const _isPWA = () => window.matchMedia('(display-mode: standalone)').matches || !!window.navigator.standalone;
 
-// Initializare Cast Framework
+// ---- CAF Sender (doar in browser Chrome, nu in PWA) ----
 window["__onGCastApiAvailable"] = function(isAvailable) {
-  if(!isAvailable) return;
+  if(!isAvailable || _isPWA()) return;  // PWA foloseste pychromecast
   castCtx = cast.framework.CastContext.getInstance();
   castCtx.setOptions({
     receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
@@ -693,10 +694,9 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
     const ss = cast.framework.SessionState;
     if(e.sessionState === ss.SESSION_STARTED || e.sessionState === ss.SESSION_RESUMED) {
       castSession = castCtx.getCurrentSession();
-      CAST.connected = true;
+      CAST.connected = true; CAST.mode = "caf";
       CAST.name = castSession.getCastDevice().friendlyName || "TV";
       updCastBtns();
-      // daca era ceva in redare, transfera pe TV
       if(e.sessionState === ss.SESSION_STARTED) {
         if(P.live && !$("#player").classList.contains("hidden")) {
           const cid=P.liveCh; closePlayer(); castPlayLive(cid);
@@ -705,11 +705,10 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
         } else toast(`Conectat la ${CAST.name}. Alege un film și apasă Redă.`);
       }
     } else if(e.sessionState === ss.SESSION_ENDED || e.sessionState === ss.NO_SESSION) {
-      castSession = null; CAST.connected = false; CAST.name = "";
+      castSession = null; CAST.connected = false; CAST.mode = null; CAST.name = "";
       hideCastBar(); updCastBtns();
     }
   });
-  // monitorizeaza progresul
   const player = new cast.framework.RemotePlayer();
   const ctrl = new cast.framework.RemotePlayerController(player);
   ctrl.addEventListener(cast.framework.RemotePlayerEventType.CURRENT_TIME_CHANGED, () => {
@@ -720,183 +719,235 @@ window["__onGCastApiAvailable"] = function(isAvailable) {
   });
   ctrl.addEventListener(cast.framework.RemotePlayerEventType.IS_PAUSED_CHANGED, () => {
     $("#cbpp use").setAttribute("href", player.isPaused ? "#i-play" : "#i-pause");
-    const devLabel = `<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
-    $("#cbdev").innerHTML = devLabel;
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
   });
   ctrl.addEventListener(cast.framework.RemotePlayerEventType.MEDIA_INFO_CHANGED, () => {
-    const mi = player.mediaInfo;
-    if(!mi) return;
-    const meta = mi.metadata || {};
-    $("#cbtitle").textContent = meta.title || mi.contentId || "";
-    if(mi.images && mi.images[0]) $("#cbimg").style.backgroundImage=`url('${mi.images[0].url}')`;
+    const mi=player.mediaInfo; if(!mi) return;
+    const meta=mi.metadata||{};
+    $("#cbtitle").textContent=meta.title||mi.contentId||"";
+    if(mi.images&&mi.images[0]) $("#cbimg").style.backgroundImage=`url('${mi.images[0].url}')`;
     showCastBar();
   });
   ctrl.addEventListener(cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED, () => {
-    if(document.activeElement !== $("#cbvol")) $("#cbvol").value = player.volumeLevel;
+    if(document.activeElement!==$("#cbvol")) $("#cbvol").value=player.volumeLevel;
   });
-  // actualizeaza butonul cand se schimba starea Cast (gasit/negasit dispozitiv)
   castCtx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, () => updCastBtns());
   CAST._player = player; CAST._ctrl = ctrl;
   updCastBtns();
 };
 
+// ---- pychromecast (PWA / Android TV) ----
 async function castRefresh(){
+  if(_isPWA() && ME && !ME.remote){
+    // in PWA folosim server-side cast (pychromecast)
+    try{const d=await api("/api/cast/devices"); CAST.devices=d.devices||[]}catch(e){CAST.devices=[]}
+  }
   updCastBtns();
 }
 function updCastBtns(){
-  // Afisam butonul Cast daca: suntem pe LAN (ME && !ME.remote) SAU deja conectat
   const lan = ME && !ME.remote;
-  const show = lan || CAST.connected;
+  const hasPycast = CAST.devices && CAST.devices.length > 0;
+  const show = lan || CAST.connected || (CAST.st && CAST.st.active);
   ["#castbtn","#pcast"].forEach(sel=>{const b=$(sel);if(!b)return;
     b.classList.toggle("hidden", !show);
-    b.classList.toggle("on", !!CAST.connected);
-    b.querySelector("use").setAttribute("href", CAST.connected ? "#i-cast-on" : "#i-cast");
-    b.title = CAST.connected ? `Conectat la ${CAST.name}` : "Redă pe TV (Google Cast)";
+    const on = CAST.connected || (CAST.st && CAST.st.active);
+    b.classList.toggle("on", !!on);
+    b.querySelector("use").setAttribute("href", on ? "#i-cast-on" : "#i-cast");
+    b.title = on ? `Conectat la ${CAST.name||CAST.st?.device_name||"TV"}` : "Redă pe TV (Google Cast)";
   });
 }
 function castMenu(anchor){
-  // In PWA (standalone) SDK-ul Cast nu functioneaza — deschidem in browser
-  const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-  if(!CAST.connected){
-    if(isPWA || !castCtx){
-      // deschide in browser Chrome unde SDK-ul Cast functioneaza
-      window.open(location.href, "_blank");
-      toast("Deschide pagina în Chrome pentru a folosi Cast pe TV", 5000);
+  const m=$("#castmenu");if(!m.classList.contains("hidden")){m.classList.add("hidden");return}
+  const tv='<svg class="ico"><use href="#i-cast"/></svg>';
+  const stActive = CAST.st && CAST.st.active;
+  if(_isPWA()){
+    // meniu pychromecast
+    m.innerHTML=`<h4>Redă pe</h4>
+      <button data-cd="" class="${!stActive?"on":""}"><svg class="ico"><use href="#i-device"/></svg><span>Acest dispozitiv</span></button>
+      ${CAST.devices.map(d=>`<button data-cd="${esc(d.id)}" class="${CAST.device===d.id&&stActive?"on":""}">${tv}<span>${esc(d.name)}<small>${esc(d.model)}</small></span></button>`).join("")}
+      ${!CAST.devices.length?'<div style="padding:10px 16px;color:#888;font-size:13px">Niciun Chromecast găsit în rețea.</div>':""}
+      ${stActive?'<div class="sep"></div><button data-cstop>■ Oprește redarea pe TV</button>':""}`;
+    m.querySelectorAll("[data-cd]").forEach(b=>b.onclick=()=>castSelectPy(b.dataset.cd));
+    const st=m.querySelector("[data-cstop]");if(st)st.onclick=()=>{m.classList.add("hidden");castCmd("stop")};
+  } else {
+    // meniu CAF
+    if(!CAST.connected){
+      castCtx ? castCtx.requestSession().catch(()=>{}) : null;
       return;
     }
-    castCtx.requestSession().catch(()=>{});
-    return;
+    m.innerHTML=`<h4>Conectat la ${esc(CAST.name)}</h4>
+      <button data-cd=""><svg class="ico"><use href="#i-device"/></svg><span>Redă pe acest dispozitiv</span></button>
+      <div class="sep"></div><button data-cstop>■ Oprește redarea pe TV</button>`;
+    m.querySelector("[data-cd]").onclick=()=>{m.classList.add("hidden");castStop();};
+    m.querySelector("[data-cstop]").onclick=()=>{m.classList.add("hidden");castStop();};
   }
-  // daca e conectat, aratam meniul de control
-  const m=$("#castmenu");if(!m.classList.contains("hidden")){m.classList.add("hidden");return}
-  m.innerHTML=`<h4>Conectat la ${esc(CAST.name)}</h4>
-    <button data-cd=""><svg class="ico"><use href="#i-device"/></svg><span>Redă pe acest dispozitiv</span></button>
-    <div class="sep"></div>
-    <button data-cstop>■ Oprește redarea pe TV</button>`;
   const r=anchor.getBoundingClientRect();m.classList.remove("hidden");
   m.style.top=Math.min(innerHeight-m.offsetHeight-10,r.bottom+8)+"px";
   m.style.left=Math.max(10,Math.min(innerWidth-m.offsetWidth-10,r.right-m.offsetWidth))+"px";
   if(anchor.id==="pcast") m.style.top=Math.max(10,r.top-m.offsetHeight-10)+"px";
-  m.querySelector("[data-cd]").onclick=()=>{m.classList.add("hidden");castStop();};
-  m.querySelector("[data-cstop]").onclick=()=>{m.classList.add("hidden");castStop();};
 }
 document.addEventListener("click",e=>{if(!e.target.closest("#castmenu,#castbtn,#pcast"))$("#castmenu").classList.add("hidden")});
 $("#castbtn").onclick=e=>{e.stopPropagation();castMenu($("#castbtn"))};
 $("#pcast").onclick=e=>{e.stopPropagation();showUI(true);castMenu($("#pcast"))};
 
+// selectare dispozitiv pychromecast (PWA)
+async function castSelectPy(id){
+  $("#castmenu").classList.add("hidden");
+  if(!id){if(CAST.st&&CAST.st.active)await castCmd("stop");CAST.device=null;CAST.name="";updCastBtns();return}
+  CAST.device=id;CAST.name=(CAST.devices.find(d=>d.id===id)||{}).name||"TV";updCastBtns();
+  if(P.live&&!$("#player").classList.contains("hidden")){
+    const cid=P.liveCh;await closePlayer();castPlayLive(cid);
+  }else if(P.media&&!$("#player").classList.contains("hidden")){
+    const mid=P.media,t=absT(),a=P.audioIdx,sub=P.subId;await closePlayer();castPlay(mid,t,a,sub??null);
+  }else toast(`Conectat la ${CAST.name}. Alege un film sau un canal și apasă Redă.`);
+}
+
+// ---- castPlay: CAF in browser, pychromecast in PWA ----
 async function castPlay(mid, start, audio, sub){
   if(sub===undefined){const ch=String(pref("sub_"+mid,"auto"));sub=ch==="auto"?"auto":ch==="off"?null:+ch}
-  if(!castSession){ toast("Cast: nu ești conectat la niciun dispozitiv",4000); return; }
   showCastBar();$("#cbtitle").textContent="Se încarcă…";
+  if(_isPWA()){
+    // pychromecast
+    if(!CAST.device){toast("Cast: selectează mai întâi un dispozitiv",4000);return}
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+    try{await api("/api/cast/play",{method:"POST",body:{device:CAST.device,media_id:mid,start:start||0,audio:audio??null,sub:sub===undefined?"auto":sub}})}
+    catch(e){toast("Cast: "+e.message,6000);return castTick()}
+    castPoll(); return;
+  }
+  // CAF
+  if(!castSession){toast("Cast: nu ești conectat la niciun dispozitiv",4000);return}
   $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
   try{
-    // cerem URL-ul de stream de la server
-    const d = await api("/api/cast/stream", {method:"POST", body:{media_id:mid, start:start||0, audio:audio??null, sub:sub===undefined?"auto":sub}});
-    const mediaInfo = new chrome.cast.media.MediaInfo(d.url, "application/x-mpegURL");
-    mediaInfo.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
-    mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
-    // metadata
-    if(d.kind === "series"){
-      const meta = new chrome.cast.media.TvShowMediaMetadata();
-      meta.seriesTitle = d.series_title; meta.title = d.title;
-      meta.season = d.season; meta.episode = d.episode;
-      if(d.thumb) meta.images = [new chrome.cast.Image(d.thumb)];
-      mediaInfo.metadata = meta;
-    } else {
-      const meta = new chrome.cast.media.MovieMediaMetadata();
-      meta.title = d.title;
-      if(d.thumb) meta.images = [new chrome.cast.Image(d.thumb)];
-      if(d.year) meta.releaseDate = String(d.year);
-      mediaInfo.metadata = meta;
+    const d=await api("/api/cast/stream",{method:"POST",body:{media_id:mid,start:start||0,audio:audio??null,sub:sub===undefined?"auto":sub}});
+    const mediaInfo=new chrome.cast.media.MediaInfo(d.url,"application/x-mpegURL");
+    mediaInfo.hlsSegmentFormat=chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
+    mediaInfo.streamType=chrome.cast.media.StreamType.BUFFERED;
+    if(d.kind==="series"){
+      const meta=new chrome.cast.media.TvShowMediaMetadata();
+      meta.seriesTitle=d.series_title;meta.title=d.title;meta.season=d.season;meta.episode=d.episode;
+      if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+      mediaInfo.metadata=meta;
+    }else{
+      const meta=new chrome.cast.media.MovieMediaMetadata();
+      meta.title=d.title;if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+      if(d.year)meta.releaseDate=String(d.year);mediaInfo.metadata=meta;
     }
-    // subtitrari
     if(d.sub_url){
-      const track = new chrome.cast.media.Track(1, chrome.cast.media.TrackType.TEXT);
-      track.trackContentId = d.sub_url; track.trackContentType = "text/vtt";
-      track.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
-      track.name = "Română"; track.language = "ro-RO";
-      mediaInfo.tracks = [track];
+      const track=new chrome.cast.media.Track(1,chrome.cast.media.TrackType.TEXT);
+      track.trackContentId=d.sub_url;track.trackContentType="text/vtt";
+      track.subtype=chrome.cast.media.TextTrackType.SUBTITLES;
+      track.name="Română";track.language="ro-RO";mediaInfo.tracks=[track];
     }
-    const req = new chrome.cast.media.LoadRequest(mediaInfo);
-    req.currentTime = d.start_time || 0;
-    if(d.sub_url) req.activeTrackIds = [1];
+    const req=new chrome.cast.media.LoadRequest(mediaInfo);
+    req.currentTime=d.start_time||0;if(d.sub_url)req.activeTrackIds=[1];
     await castSession.loadMedia(req);
-    CAST.mediaToken = d.token; CAST.mediaId = mid; CAST.itemId = d.item_id;
-    // raporteaza progresul la server
-    _castProgressStart(d.token, mid, d.duration);
-  } catch(e){ toast("Cast: "+(e.description||e.message||e), 6000); }
+    CAST.mediaToken=d.token;CAST.mediaId=mid;CAST.itemId=d.item_id;
+    _castProgressStart(d.token,mid,d.duration);
+  }catch(e){toast("Cast: "+(e.description||e.message||e),6000);}
 }
 
 async function castPlayLive(cid){
-  if(!castSession){ toast("Cast: nu ești conectat la niciun dispozitiv",4000); return; }
   showCastBar();$("#cbtitle").textContent="Se încarcă…";
+  if(_isPWA()){
+    if(!CAST.device){toast("Cast: selectează mai întâi un dispozitiv",4000);return}
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+    try{await api("/api/cast/live",{method:"POST",body:{device:CAST.device,channel:cid}})}
+    catch(e){toast("Cast: "+e.message,6000);return castTick()}
+    castPoll(); return;
+  }
+  if(!castSession){toast("Cast: nu ești conectat la niciun dispozitiv",4000);return}
   $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
   try{
-    const d = await api("/api/cast/stream/live", {method:"POST", body:{channel:cid}});
-    const mediaInfo = new chrome.cast.media.MediaInfo(d.url, "application/x-mpegURL");
-    mediaInfo.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
-    mediaInfo.streamType = chrome.cast.media.StreamType.LIVE;
-    const meta = new chrome.cast.media.GenericMediaMetadata();
-    meta.title = d.title;
-    if(d.thumb) meta.images = [new chrome.cast.Image(d.thumb)];
-    mediaInfo.metadata = meta;
-    const req = new chrome.cast.media.LoadRequest(mediaInfo);
+    const d=await api("/api/cast/stream/live",{method:"POST",body:{channel:cid}});
+    const mediaInfo=new chrome.cast.media.MediaInfo(d.url,"application/x-mpegURL");
+    mediaInfo.hlsSegmentFormat=chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
+    mediaInfo.streamType=chrome.cast.media.StreamType.LIVE;
+    const meta=new chrome.cast.media.GenericMediaMetadata();
+    meta.title=d.title;if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+    mediaInfo.metadata=meta;
+    const req=new chrome.cast.media.LoadRequest(mediaInfo);
     await castSession.loadMedia(req);
-    CAST.mediaToken = d.token; CAST.mediaId = null; CAST.itemId = null;
-  } catch(e){ toast("Cast: "+(e.description||e.message||e), 6000); }
+    CAST.mediaToken=d.token;CAST.mediaId=null;CAST.itemId=null;
+  }catch(e){toast("Cast: "+(e.description||e.message||e),6000);}
 }
 
 function castStop(){
-  if(castSession) castSession.endSession(true);
-  hideCastBar(); CAST.connected=false; CAST.name=""; updCastBtns();
+  if(_isPWA()){castCmd("stop");return}
+  if(castSession)castSession.endSession(true);
+  hideCastBar();CAST.connected=false;CAST.mode=null;CAST.name="";updCastBtns();
   _castProgressStop();
 }
 
-// progress reporting la server (pentru resume + log)
-let _castProgTimer = null;
-function _castProgressStart(token, mid, dur){
+// progress CAF
+let _castProgTimer=null;
+function _castProgressStart(token,mid,dur){
   _castProgressStop();
-  _castProgTimer = setInterval(async()=>{
-    const p = CAST._player;
-    if(!p || !castSession) return;
-    try{ await api("/api/cast/progress", {method:"POST", body:{token, pos: p.currentTime||0, duration:dur||p.duration||0, state: p.isPaused?"PAUSED":"PLAYING"}}); }
-    catch(e){}
-  }, 5000);
+  _castProgTimer=setInterval(async()=>{
+    const p=CAST._player;if(!p||!castSession)return;
+    try{await api("/api/cast/progress",{method:"POST",body:{token,pos:p.currentTime||0,duration:dur||p.duration||0,state:p.isPaused?"PAUSED":"PLAYING"}})}catch(e){}
+  },5000);
 }
 function _castProgressStop(){
-  if(_castProgTimer){ clearInterval(_castProgTimer); _castProgTimer=null; }
-  if(CAST.mediaToken) api("/api/cast/progress", {method:"POST", body:{token:CAST.mediaToken, pos:CAST._player?.currentTime||0, done:true}}).catch(()=>{});
-  CAST.mediaToken = null;
+  if(_castProgTimer){clearInterval(_castProgTimer);_castProgTimer=null;}
+  if(CAST.mediaToken)api("/api/cast/progress",{method:"POST",body:{token:CAST.mediaToken,pos:CAST._player?.currentTime||0,done:true}}).catch(()=>{});
+  CAST.mediaToken=null;
 }
 
 function showCastBar(){$("#castbar").classList.remove("hidden");document.body.classList.add("casting")}
 function hideCastBar(){$("#castbar").classList.add("hidden");document.body.classList.remove("casting")}
-// castPoll si castTick raman pentru compatibilitate dar nu mai fac nimic (CAF le inlocuieste)
-function castPoll(){}
-async function castTick(){}
-function castSkip(sec){
-  const p=CAST._player, c=CAST._ctrl;
-  if(!p||!c||!castSession) return;
-  p.currentTime = Math.max(0, (p.currentTime||0)+sec);
-  c.seek();
+
+// pychromecast polling (PWA)
+function castPoll(){clearInterval(CAST.timer);CAST.timer=setInterval(castTick,1000);castTick()}
+async function castTick(){
+  if(!_isPWA())return;
+  let s;try{s=await api("/api/cast/status")}catch(e){return}
+  CAST.st=s;
+  if(!s.active){hideCastBar();clearInterval(CAST.timer);CAST.timer=null;return}
+  CAST.device=s.device;CAST.name=s.device_name;updCastBtns();showCastBar();
+  $("#cbtitle").textContent=s.title;
+  $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${s.state==="BUFFERING"?t("cast_buffering"):s.state==="PAUSED"?t("cast_paused"):t("cast_playing")} ${esc(s.device_name)}`;
+  $("#cbimg").style.backgroundImage=s.img?`url('${img(s.img,"w300")}')`:"";
+  if(!CAST.drag)$("#cbdone").style.width=(s.duration?Math.min(100,s.position/s.duration*100):0)+"%";
+  $("#cbtime").textContent=`${fmtT(s.position)} / ${fmtT(s.duration)}`;
+  $("#cbpp use").setAttribute("href",s.state==="PAUSED"?"#i-play":"#i-pause");
+  if(document.activeElement!==$("#cbvol"))$("#cbvol").value=s.muted?0:s.volume;
+  const opts=`<option value="">Fără subtitrări</option>`+s.subs.map(x=>`<option value="${x.id}">${esc(x.label)}</option>`).join("");
+  if($("#cbsub").dataset.k!==opts){$("#cbsub").innerHTML=opts;$("#cbsub").dataset.k=opts}
+  if(document.activeElement!==$("#cbsub"))$("#cbsub").value=s.sub_id||"";
 }
-$("#cbpp").onclick=()=>{ const c=CAST._ctrl; if(c) CAST._player.isPaused ? c.playOrPause() : c.playOrPause(); };
-$("#cbvol").onchange=e=>{ const p=CAST._player,c=CAST._ctrl; if(!p||!c) return; p.volumeLevel=+e.target.value; c.setVolumeLevel(); };
+async function castCmd(action,extra={}){
+  try{await api("/api/cast/control",{method:"POST",body:{action,...extra}})}catch(e){toast(e.message)}
+  if(action==="stop"){hideCastBar()}setTimeout(castTick,400)
+}
+function castSkip(sec){
+  if(_isPWA()){if(CAST.st&&CAST.st.active)castCmd("seek",{pos:CAST.st.position+sec});return}
+  const p=CAST._player,c=CAST._ctrl;
+  if(!p||!c||!castSession)return;
+  p.currentTime=Math.max(0,(p.currentTime||0)+sec);c.seek();
+}
+$("#cbpp").onclick=()=>{
+  if(_isPWA()){castCmd(CAST.st&&CAST.st.state==="PAUSED"?"play":"pause");return}
+  const c=CAST._ctrl;if(c)c.playOrPause();
+};
+$("#cbvol").onchange=e=>{
+  if(_isPWA()){castCmd("volume",{value:+e.target.value});return}
+  const p=CAST._player,c=CAST._ctrl;if(!p||!c)return;p.volumeLevel=+e.target.value;c.setVolumeLevel();
+};
 $("#cbsub").onchange=e=>{
-  t("cast_sub_change");
-  const val=e.target.value;
-  if(!castSession) return;
-  const media=castSession.getMediaSession();
-  if(!media) return;
-  if(val) media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([+val]),()=>{},()=>{});
+  t("cast_sub_change");const val=e.target.value;
+  if(_isPWA()){castCmd("sub",{value:val||null});return}
+  if(!castSession)return;
+  const media=castSession.getMediaSession();if(!media)return;
+  if(val)media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([+val]),()=>{},()=>{});
   else media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([]),()=>{},()=>{});
 };
 $("#cbseek").addEventListener("click",e=>{
   const r=$("#cbseek .rail").getBoundingClientRect();
   const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  if(_isPWA()){if(CAST.st&&CAST.st.duration){$("#cbdone").style.width=f*100+"%";castCmd("seek",{pos:f*CAST.st.duration})}return}
   const p=CAST._player,c=CAST._ctrl;
-  if(!p||!c||!p.duration) return;
-  p.currentTime=f*p.duration; c.seek();
+  if(!p||!c||!p.duration)return;
+  p.currentTime=f*p.duration;c.seek();
   $("#cbdone").style.width=(f*100)+"%";
 });
 $("#cbseek").addEventListener("mousemove",e=>{
