@@ -3230,6 +3230,14 @@ def cast_start(uid, dev_id, media_id, start, audio, sub_id):
     thumb = f"{base}/image.jpg" if img else None
     if thumb:
         md["images"] = [{"url": thumb}]
+    # Lansam receiver-ul custom CineVerse (App ID BEE3563A) daca nu e deja activ
+    CINEVERSE_APP_ID = "BEE3563A"
+    try:
+        if cc.app_id != CINEVERSE_APP_ID:
+            cc.start_app(CINEVERSE_APP_ID)
+            cc.wait(timeout=10)
+    except Exception as _e:
+        log.warning("Nu am putut lansa receiver-ul custom CineVerse: %s", _e)
     mc = cc.media_controller
     kw = dict(title=title, thumb=thumb, current_time=max(0.0, float(start)), stream_type="BUFFERED", metadata=md,
               media_info={"hlsSegmentFormat": "ts", "hlsVideoSegmentFormat": "mpeg2_ts"})
@@ -3739,6 +3747,14 @@ def cast_start_live(uid, dev_id, cid):
     LIVE_TOKENS[tok] = (ch["id"], "orig")
     base = f"http://{local_ip_for(cc.cast_info.host)}:{HTTP_PORT}/cast/live/{tok}"
     thumb = f"{base}/logo" if ch["logo"] else None
+    # Lansam receiver-ul custom CineVerse
+    CINEVERSE_APP_ID = "BEE3563A"
+    try:
+        if cc.app_id != CINEVERSE_APP_ID:
+            cc.start_app(CINEVERSE_APP_ID)
+            cc.wait(timeout=10)
+    except Exception as _e:
+        log.warning("Nu am putut lansa receiver-ul custom CineVerse (live): %s", _e)
     cc.media_controller.play_media(f"{base}/index.m3u8", "application/x-mpegURL", title=ch["name"], thumb=thumb, stream_type="LIVE",
                                    metadata={"metadataType": 0, "title": ch["name"], "subtitle": "TV Live", **({"images": [{"url": thumb}]} if thumb else {})},
                                    media_info={"hlsSegmentFormat": "ts", "hlsVideoSegmentFormat": "mpeg2_ts"})
