@@ -1,57 +1,77 @@
-# CineVerse by NetStreaming
+# CineVerse
 
-Platformă self-hosted de streaming media, concepută pentru rețele locale și servere dedicate.
+**Server media personal** cu suport Chromecast, streaming live TV, și transcodare hardware.
 
 ## Funcționalități
 
-- **Bibliotecă media** — filme și seriale cu metadate automate din TMDB (poster, descriere, rating, genuri)
-- **Player HLS** — transcodare hardware (VAAPI/NVENC) prin FFmpeg, cu suport audio AAC/EAC3/DD+
-- **Subtitrări** — descărcare automată din OpenSubtitles în română, sincronizare offset
-- **TV Live** — suport canale IPTV
-- **Google Cast** — redare pe Chromecast din browser
-- **Autentificare** — utilizatori cu parole, 2FA (TOTP), sesiuni multiple
-- **Admin panel** — scanare bibliotecă, gestionare utilizatori, setări server, restart servicii
-- **PWA** — instalabil pe Android/iOS, aplicație Android nativă inclusă (`.apk`)
-- **Interfață în română**
-
-## Stack tehnic
-
-| Component | Tehnologie |
-|-----------|-----------|
-| Backend | Python 3 · FastAPI · SQLite |
-| Frontend | HTML/CSS/JS vanilla (fără framework) |
-| Transcodare | FFmpeg · VAAPI (Intel/AMD) · NVENC (NVIDIA) |
-| HLS | hls.js |
-| Metadate | TMDB API |
-| Subtitrări | OpenSubtitles API |
-
-## Instalare
-
-Descarcă și rulează installer-ul all-in-one (generat cu `build.sh`):
-
-```bash
-bash cineverse-install.sh
-```
-
-Installer-ul instalează automat dependențele (Python, FFmpeg, etc.), creează serviciul systemd și pornește serverul.
-
-Accesează interfața la: `http://IP-SERVER:8000`
+- 🎬 **Redare filme/seriale** cu subtitluri, selectare audio, rezumat și poster TMDB
+- 📺 **Live TV** — canale IPTV cu EPG
+- 📱 **PWA** — instalabil pe Android, Android TV, iOS
+- 🎯 **Chromecast** — CAF direct din browser Chrome, pychromecast din PWA/Android TV
+- ⚡ **Transcodare hardware** VAAPI (Intel/AMD) sau software fallback
+- 🖼️ **Preview seek bar** — miniaturi la hover pe bara de progres
+- 👥 **Multi-utilizator** cu autentificare și permisiuni per utilizator
+- 🔒 **HTTPS** cu Let's Encrypt (opțional)
 
 ## Cerințe
 
-- Linux (Debian/Ubuntu recomandat)
+- Ubuntu 22.04+ (sau Debian 12+)
 - Python 3.10+
-- FFmpeg cu suport VAAPI sau NVENC (pentru transcodare hardware)
-- Cheie API TMDB (gratuit la [themoviedb.org](https://www.themoviedb.org/settings/api))
-- Cheie API OpenSubtitles (opțional, pentru subtitrări automate)
+- FFmpeg cu suport VAAPI (pentru transcodare hardware)
+- Domeniu DNS propriu (pentru HTTPS și Chromecast)
+- Port 80/443 deschis
 
-## Build installer
+## Instalare rapidă
 
 ```bash
-bash build.sh
-# generează: outputs/cineverse-install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/maxvideostar/CineVerse/main/outputs/cineverse-install.sh)
 ```
+
+Instalatorul:
+1. Instalează dependențele (Python, FFmpeg, Nginx)
+2. Creează serviciul systemd `cineverse`
+3. Configurează Nginx reverse proxy
+4. Pornește aplicația pe portul 8000
+
+## Configurare post-instalare
+
+Editează `/opt/cineverse/server.py` și modifică:
+
+```python
+SECRET_KEY = "schimba-asta-cu-ceva-random"  # cheie sesiune
+DOMAIN = "exemplu.ro"                         # domeniul tău
+```
+
+Repornește serviciul:
+```bash
+systemctl restart cineverse
+```
+
+## Structura proiectului
+
+```
+CineVerse/
+├── server.py          # Backend FastAPI
+├── static/
+│   ├── index.html     # Frontend (SPA)
+│   └── cast-receiver.html  # Receiver Chromecast personalizat
+├── build.sh           # Script asamblare installer
+├── outputs/
+│   └── cineverse-install.sh  # Installer all-in-one (generat)
+└── LICENSE            # GPL v3
+```
+
+## Chromecast
+
+CineVerse folosește o arhitectură hibridă:
+
+| Context | Metodă | Comportament |
+|---------|--------|--------------|
+| Browser Chrome | Cast Application Framework (CAF) | Control direct, fără delay |
+| PWA / Android TV | pychromecast (server-side) | Compatibil cu toate contextele |
+
+App ID receiver personalizat: `BEE3563A` (înregistrat la `testcam.go.ro/cast-receiver.html`)
 
 ## Licență
 
-Proiect privat — [NetStreaming](https://netstreaming.eu)
+[GNU General Public License v3](LICENSE) — Copyright © 2024-2026 Cristian (maxvideostar)
