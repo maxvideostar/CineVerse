@@ -6272,9 +6272,16 @@ function updCastBtns(){
   });
 }
 function castMenu(anchor){
-  // CAF foloseste butonul nativ Cast — deschidem sesiunea direct
+  // In PWA (standalone) SDK-ul Cast nu functioneaza — deschidem in browser
+  const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
   if(!CAST.connected){
-    castCtx && castCtx.requestSession().catch(()=>{});
+    if(isPWA || !castCtx){
+      // deschide in browser Chrome unde SDK-ul Cast functioneaza
+      window.open(location.href, "_blank");
+      toast("Deschide pagina în Chrome pentru a folosi Cast pe TV", 5000);
+      return;
+    }
+    castCtx.requestSession().catch(()=>{});
     return;
   }
   // daca e conectat, aratam meniul de control
