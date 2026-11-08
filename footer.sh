@@ -3,16 +3,16 @@
 if [ ! -s "$APP/static/hls.min.js" ] || [ $UPDATE = 1 ]; then
   curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js \
    || curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://unpkg.com/hls.js@1/dist/hls.min.js \
-   || warn "Nu am putut descărca hls.js – playerul îl va încărca din CDN."
+   || warn "$(_t "Could not download hls.js – player will load it from CDN." "Nu am putut descărca hls.js – playerul îl va încărca din CDN.")"
   [ -s "$APP/static/hls.min.js.tmp" ] && mv "$APP/static/hls.min.js.tmp" "$APP/static/hls.min.js" || rm -f "$APP/static/hls.min.js.tmp"
 fi
 
 # ------------------------------------------------------------------ Python venv
-say "Creez mediul Python…"
+say "$(_t "Creating Python environment…" "Creez mediul Python…")"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install -q --upgrade pip >/dev/null
 "$APP/venv/bin/pip" install -q --upgrade "fastapi>=0.115" "uvicorn[standard]>=0.30" "httpx>=0.27" "guessit>=3.8" "pychromecast>=14" >/dev/null
-ok "Dependențe Python instalate"
+ok "$(_t "Python dependencies installed" "Dependențe Python instalate")"
 
 chown -R root:root "$APP"; chmod -R a+rX "$APP"
 chown -R $USR:$USR "$DATA"
@@ -22,9 +22,9 @@ if [ $UPDATE = 0 ] || [ -n "${MIGRATED:-}" ]; then
   IFS=';' read -ra DIRS <<< "$CINEVERSE_MEDIA"
   for d in "${DIRS[@]}"; do
     d=$(echo "$d" | xargs); [ -z "$d" ] && continue
-    [ -d "$d" ] || { warn "Folderul $d nu există (îl poți corecta din Administrare → Setări)"; continue; }
+    [ -d "$d" ] || { warn "$(_t "Folder $d does not exist (fix it from Admin → Settings)" "Folderul $d nu există (îl poți corecta din Administrare → Setări)")"; continue; }
     if ! runuser -u $USR -- test -r "$d" -a -x "$d" 2>/dev/null || ! runuser -u $USR -- ls "$d" >/dev/null 2>&1; then
-      say "Dau acces de citire utilizatorului '$USR' la $d (ACL)…"
+      say "$(_t "Granting read access for user '$USR' to $d (ACL)…" "Dau acces de citire utilizatorului '$USR' la $d (ACL)…")"
       p="$d"; while [ "$p" != "/" ]; do p=$(dirname "$p"); setfacl -m u:$USR:x "$p" 2>/dev/null || true; done
       setfacl -R -m u:$USR:rX "$d" 2>/dev/null || true
       setfacl -R -d -m u:$USR:rX "$d" 2>/dev/null || true
@@ -35,7 +35,7 @@ if [ -n "${MIGRATED:-}" ]; then
   id cinemo >/dev/null 2>&1 && userdel cinemo 2>/dev/null || true
 fi
 if [ $UPDATE = 0 ]; then
-  say "Configurez serverul…"
+  say "$(_t "Configuring server…" "Configurez serverul…")"
   runuser -u $USR -- env CINEVERSE_DATA="$DATA" "$APP/venv/bin/python" "$APP/server.py" setup \
     --admin-user "$CINEVERSE_ADMIN" --admin-pass "$CINEVERSE_PASS" --media-dirs "$CINEVERSE_MEDIA" \
     --tmdb-key "${TMDB_KEY:-}" --os-key "${OS_KEY:-}" --os-user "${OS_USER:-}" --os-pass "${OS_PASS:-}" >/dev/null
@@ -73,25 +73,25 @@ systemctl enable $SVC >/dev/null 2>&1
 systemctl restart $SVC
 
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "Port $CINEVERSE_PORT deschis în ufw"
-  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "mDNS (5353/udp) permis – pentru descoperirea Chromecast"
+  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "$(_t "Port $CINEVERSE_PORT opened in ufw" "Port $CINEVERSE_PORT deschis în ufw")"
+  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "$(_t "mDNS (5353/udp) allowed – for Chromecast discovery" "mDNS (5353/udp) permis – pentru descoperirea Chromecast")"
 fi
 
-say "Aștept pornirea…"
+say "$(_t "Waiting for startup…" "Aștept pornirea…")"
 for i in $(seq 1 30); do curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/" && break; sleep 1; done
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 if curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/"; then
   echo
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
-  echo -e "  ${G}CineVerse by NetStreaming rulează!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
+  echo -e "  ${G}CineVerse by NetStreaming $(_t "is running" "rulează")!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
   if [ $UPDATE = 0 ]; then
-    echo -e "  Utilizator: ${B}$CINEVERSE_ADMIN${N}"
-    [ -n "${GEN_PASS:-}" ] && echo -e "  Parolă generată: ${B}$CINEVERSE_PASS${N}"
+    echo -e "  $(_t "Username" "Utilizator"): ${B}$CINEVERSE_ADMIN${N}"
+    [ -n "${GEN_PASS:-}" ] && echo -e "  $(_t "Generated password" "Parolă generată"): ${B}$CINEVERSE_PASS${N}"
   fi
   VA=$(runuser -u $USR -- vainfo 2>/dev/null | grep -c VAEntrypointEncSlice || true)
-  [ "${VA:-0}" -gt 0 ] && echo -e "  Transcodare hardware: ${G}VAAPI disponibil${N}" || echo -e "  Transcodare hardware: vezi Administrare → Bibliotecă"
-  echo -e "  Loguri:  ${B}journalctl -u $SVC -f${N}"
+  [ "${VA:-0}" -gt 0 ] && echo -e "  $(_t "Hardware transcoding" "Transcodare hardware"): ${G}VAAPI $(_t "available" "disponibil")${N}" || echo -e "  $(_t "Hardware transcoding: see Admin → Library" "Transcodare hardware: vezi Administrare → Bibliotecă")"
+  echo -e "  $(_t "Logs" "Loguri"):  ${B}journalctl -u $SVC -f${N}"
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
 else
-  die "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager"
+  die "$(_t "Service did not start. Check:  journalctl -u $SVC -n 50 --no-pager" "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager")"
 fi

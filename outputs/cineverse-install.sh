@@ -20,20 +20,44 @@ DATA=/var/lib/cineverse
 SVC=cineverse
 USR=cineverse
 G='\e[1;32m'; R='\e[1;31m'; Y='\e[1;33m'; B='\e[1;36m'; N='\e[0m'
+
+# ---- language selection / selectare limbă
+_pick_lang(){
+  echo -e "\n${B}Select language / Selectează limba:${N}"
+  echo "  1) English"
+  echo "  2) Română"
+  local ch
+  TTY_L=""; ( : </dev/tty ) 2>/dev/null && TTY_L=/dev/tty
+  if [ -n "$TTY_L" ]; then
+    read -rp "  Choice / Alegere [1/2, default=1]: " ch <"$TTY_L"
+  else ch="1"; fi
+  case "${ch:-1}" in
+    2) LANG_CV=ro ;;
+    *) LANG_CV=en ;;
+  esac
+}
+[ -n "${LANG_CV:-}" ] || _pick_lang
+
+# ---- i18n helpers
+_t(){
+  # _t en_string ro_string
+  if [ "${LANG_CV:-en}" = "ro" ]; then echo "$2"; else echo "$1"; fi
+}
+
 say(){ echo -e "${B}==>${N} $*"; }
 ok(){ echo -e "${G}✔${N} $*"; }
 warn(){ echo -e "${Y}!${N} $*"; }
 die(){ echo -e "${R}✘ $*${N}"; exit 1; }
 
-[ "$(id -u)" = 0 ] || die "Rulează cu sudo:  sudo bash $0"
+[ "$(id -u)" = 0 ] || die "$(_t "Run with sudo:  sudo bash $0" "Rulează cu sudo:  sudo bash $0")"
 
 if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now $SVC 2>/dev/null || true
   rm -f /etc/systemd/system/$SVC.service; systemctl daemon-reload
   rm -rf "$APP"
-  a=n; ( : </dev/tty ) 2>/dev/null && read -rp "Șterg și baza de date / cache-ul din $DATA? [y/N] " a </dev/tty
+  a=n; ( : </dev/tty ) 2>/dev/null && read -rp "$(_t "Also delete database / cache from $DATA? [y/N] " "Șterg și baza de date / cache-ul din $DATA? [y/N] ")" a </dev/tty
   [[ "$a" =~ ^[yY] ]] && rm -rf "$DATA" && userdel $USR 2>/dev/null || true
-  ok "CineVerse a fost dezinstalat."; exit 0
+  ok "$(_t "CineVerse has been uninstalled." "CineVerse a fost dezinstalat.")"; exit 0
 fi
 
 TTY=""; ( : </dev/tty ) 2>/dev/null && TTY=/dev/tty
@@ -41,14 +65,14 @@ TTY=""; ( : </dev/tty ) 2>/dev/null && TTY=/dev/tty
 if [ "${1:-}" = "--reset-admin" ]; then
   [ -f "$DATA/cineverse.db" ] || die "CineVerse nu este instalat."
   [ -n "$TTY" ] || die "Rulează comanda într-un terminal."
-  read -rp "Nume cont administrator: " RA_USER <"$TTY"
-  read -rsp "Parolă nouă: " RA_PASS <"$TTY"; echo
-  [ -n "$RA_USER" ] && [ ${#RA_PASS} -ge 4 ] || die "Nume și parolă (min. 4 caractere) obligatorii."
+  read -rp "$(_t "Administrator account name: " "Nume cont administrator: ")" RA_USER <"$TTY"
+  read -rsp "$(_t "New password: " "Parolă nouă: ")" RA_PASS <"$TTY"; echo
+  [ -n "$RA_USER" ] && [ ${#RA_PASS} -ge 4 ] || die "$(_t "Name and password (min. 4 chars) are required." "Nume și parolă (min. 4 caractere) obligatorii.")"
   runuser -u $USR -- env CINEVERSE_DATA="$DATA" "$APP/venv/bin/python" "$APP/server.py" setup --admin-user "$RA_USER" --admin-pass "$RA_PASS" >/dev/null
   systemctl restart $SVC
-  ok "Contul '$RA_USER' este acum singurul administrator (parola a fost schimbată, sesiunile vechi închise)."; exit 0
+  ok "$(_t "Account '$RA_USER' is now the sole administrator (password changed, old sessions closed)." "Contul '$RA_USER' este acum singurul administrator (parola a fost schimbată, sesiunile vechi închise).")"; exit 0
 fi
-ask(){ # ask VAR "Întrebare" "implicit" [secret]
+ask(){ # ask VAR "Question" "default" [secret]
   local var=$1 q=$2 def=${3:-} val
   if [ -n "${!var:-}" ]; then return; fi
   if [ -n "$TTY" ]; then
@@ -71,7 +95,7 @@ echo -e "${N}                                              ${B}by NetStreaming${
 # ---- migrare automata din vechea instalare "Cinemo"
 OLD_DATA=/var/lib/cinemo
 if [ $UPDATE = 0 ] && [ -f "$OLD_DATA/cinemo.db" ]; then
-  say "Am găsit instalarea Cinemo – o mut în CineVerse (setări, bibliotecă, utilizatori, progres, subtitrări)…"
+  say "$(_t "Found Cinemo installation – migrating to CineVerse (settings, library, users, progress, subtitles)…" "Am găsit instalarea Cinemo – o mut în CineVerse (setări, bibliotecă, utilizatori, progres, subtitrări)…")"
   OLD_PORT=$(sed -n 's/^Environment=CINEMO_PORT=//p' /etc/systemd/system/cinemo.service 2>/dev/null || true)
   systemctl disable --now cinemo >/dev/null 2>&1 || true
   mkdir -p "$DATA"
@@ -90,53 +114,53 @@ PYMIG
   rm -rf /opt/cinemo
   CINEVERSE_PORT=${OLD_PORT:-8200}
   UPDATE=1; MIGRATED=1
-  ok "Datele au fost copiate. Vechiul folder $OLD_DATA a rămas ca backup (îl poți șterge după ce verifici)."
+  ok "$(_t "Data copied. Old folder $OLD_DATA kept as backup (you can delete it after verifying)." "Datele au fost copiate. Vechiul folder $OLD_DATA a rămas ca backup (îl poți șterge după ce verifici).")"
 fi
 
 if [ $UPDATE = 1 ] && [ -z "${MIGRATED:-}" ]; then
-  say "Instalare existentă găsită – actualizez aplicația (setările și biblioteca rămân)."
+  say "$(_t "Existing installation found – updating app (settings and library are preserved)." "Instalare existentă găsită – actualizez aplicația (setările și biblioteca rămân).")"
   CINEVERSE_PORT=$(sed -n 's/^Environment=CINEVERSE_PORT=//p' /etc/systemd/system/$SVC.service 2>/dev/null || true)
   CINEVERSE_PORT=${CINEVERSE_PORT:-8200}
 elif [ -n "${MIGRATED:-}" ]; then
   :
 else
-  ask CINEVERSE_PORT  "Port web" "8200"
-  ask CINEVERSE_MEDIA "Foldere cu filme/seriale (separate prin ;)" "/media"
-  ask CINEVERSE_ADMIN "Utilizator administrator" "admin"
+  ask CINEVERSE_PORT  "$(_t "Web port" "Port web")" "8200"
+  ask CINEVERSE_MEDIA "$(_t "Media folders (separated by ;)" "Foldere cu filme/seriale (separate prin ;)")" "/media"
+  ask CINEVERSE_ADMIN "$(_t "Administrator username" "Utilizator administrator")" "admin"
   while [ -z "${CINEVERSE_PASS:-}" ]; do
-    ask CINEVERSE_PASS "Parolă administrator" "" secret
+    ask CINEVERSE_PASS "$(_t "Administrator password" "Parolă administrator")" "" secret
     [ -n "$TTY" ] || { CINEVERSE_PASS=$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 12); GEN_PASS=1; }
   done
-  echo -e "\n${Y}Chei API gratuite (le poți pune și mai târziu din Administrare → Setări):${N}"
-  echo "  TMDB (postere, descrieri, actori):  https://www.themoviedb.org/settings/api"
-  echo "  OpenSubtitles (subtitrări RO):      https://www.opensubtitles.com/en/consumers"
-  ask TMDB_KEY "Cheie TMDB (Enter = sari)" ""
-  ask OS_KEY   "OpenSubtitles API key (Enter = sari)" ""
+  echo -e "\n${Y}$(_t "Free API keys (you can also add them later from Admin → Settings):" "Chei API gratuite (le poți pune și mai târziu din Administrare → Setări):")${N}"
+  echo "  TMDB ($(_t "posters, descriptions, actors" "postere, descrieri, actori")):  https://www.themoviedb.org/settings/api"
+  echo "  OpenSubtitles ($(_t "subtitles" "subtitrări RO")):      https://www.opensubtitles.com/en/consumers"
+  ask TMDB_KEY "$(_t "TMDB key (Enter = skip)" "Cheie TMDB (Enter = sari)")" ""
+  ask OS_KEY   "$(_t "OpenSubtitles API key (Enter = skip)" "OpenSubtitles API key (Enter = sari)")" ""
   if [ -n "${OS_KEY:-}" ]; then
-    ask OS_USER "OpenSubtitles utilizator (opțional, mărește limita zilnică)" ""
-    [ -n "${OS_USER:-}" ] && ask OS_PASS "OpenSubtitles parolă" "" secret
+    ask OS_USER "$(_t "OpenSubtitles username (optional, increases daily limit)" "OpenSubtitles utilizator (opțional, mărește limita zilnică)")" ""
+    [ -n "${OS_USER:-}" ] && ask OS_PASS "$(_t "OpenSubtitles password" "OpenSubtitles parolă")" "" secret
   fi
 fi
 
 # ------------------------------------------------------------------ pachete
-say "Instalez pachetele de sistem…"
+say "$(_t "Installing system packages…" "Instalez pachetele de sistem…")"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip ffmpeg curl ca-certificates acl pciutils >/dev/null
 GPU=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 if echo "$GPU" | grep -qi intel; then
-  say "GPU Intel detectat – instalez driverele VAAPI/QuickSync"
+  say "$(_t "Intel GPU detected – installing VAAPI/QuickSync drivers" "GPU Intel detectat – instalez driverele VAAPI/QuickSync")"
   grep -q multiverse /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || { add-apt-repository -y multiverse >/dev/null 2>&1 && apt-get update -qq || true; }
   apt-get install -y -qq intel-media-va-driver-non-free vainfo >/dev/null 2>&1 || apt-get install -y -qq intel-media-va-driver vainfo >/dev/null 2>&1 || true
   apt-get install -y -qq i965-va-driver >/dev/null 2>&1 || true
   apt-get install -y -qq libvpl2 libmfx-gen1.2 >/dev/null 2>&1 || apt-get install -y -qq libmfx1 >/dev/null 2>&1 || true
 fi
 if echo "$GPU" | grep -Eqi 'amd|ati|radeon'; then
-  say "GPU AMD detectat – instalez mesa-va-drivers"
+  say "$(_t "AMD GPU detected – installing mesa-va-drivers" "GPU AMD detectat – instalez mesa-va-drivers")"
   apt-get install -y -qq mesa-va-drivers vainfo >/dev/null 2>&1 || true
 fi
-echo "$GPU" | grep -qi nvidia && warn "GPU NVIDIA detectat – pentru NVENC trebuie driverul proprietar (ex: sudo ubuntu-drivers install)."
-ok "Pachete instalate"
+echo "$GPU" | grep -qi nvidia && warn "$(_t "NVIDIA GPU detected – for NVENC you need the proprietary driver (e.g. sudo ubuntu-drivers install)." "GPU NVIDIA detectat – pentru NVENC trebuie driverul proprietar (ex: sudo ubuntu-drivers install).")"
+ok "$(_t "Packages installed" "Pachete instalate")"
 
 # ------------------------------------------------------------------ utilizator sistem
 id $USR >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -d "$DATA" $USR
@@ -144,7 +168,7 @@ for g in video render; do getent group $g >/dev/null && usermod -aG $g $USR; don
 mkdir -p "$APP/static" "$DATA"
 
 # ------------------------------------------------------------------ fișierele aplicației
-say "Scriu aplicația în $APP…"
+say "$(_t "Writing application to $APP…" "Scriu aplicația în $APP…")"
 cat > "$APP/server.py" <<'CINEVERSE_PY_EOF'
 #!/usr/bin/env python3
 """CineVerse by NetStreaming - media server personal (filme + seriale), stil Netflix.
@@ -9485,16 +9509,16 @@ CINEVERSE_B64_EOF
 if [ ! -s "$APP/static/hls.min.js" ] || [ $UPDATE = 1 ]; then
   curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js \
    || curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://unpkg.com/hls.js@1/dist/hls.min.js \
-   || warn "Nu am putut descărca hls.js – playerul îl va încărca din CDN."
+   || warn "$(_t "Could not download hls.js – player will load it from CDN." "Nu am putut descărca hls.js – playerul îl va încărca din CDN.")"
   [ -s "$APP/static/hls.min.js.tmp" ] && mv "$APP/static/hls.min.js.tmp" "$APP/static/hls.min.js" || rm -f "$APP/static/hls.min.js.tmp"
 fi
 
 # ------------------------------------------------------------------ Python venv
-say "Creez mediul Python…"
+say "$(_t "Creating Python environment…" "Creez mediul Python…")"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install -q --upgrade pip >/dev/null
 "$APP/venv/bin/pip" install -q --upgrade "fastapi>=0.115" "uvicorn[standard]>=0.30" "httpx>=0.27" "guessit>=3.8" "pychromecast>=14" >/dev/null
-ok "Dependențe Python instalate"
+ok "$(_t "Python dependencies installed" "Dependențe Python instalate")"
 
 chown -R root:root "$APP"; chmod -R a+rX "$APP"
 chown -R $USR:$USR "$DATA"
@@ -9504,9 +9528,9 @@ if [ $UPDATE = 0 ] || [ -n "${MIGRATED:-}" ]; then
   IFS=';' read -ra DIRS <<< "$CINEVERSE_MEDIA"
   for d in "${DIRS[@]}"; do
     d=$(echo "$d" | xargs); [ -z "$d" ] && continue
-    [ -d "$d" ] || { warn "Folderul $d nu există (îl poți corecta din Administrare → Setări)"; continue; }
+    [ -d "$d" ] || { warn "$(_t "Folder $d does not exist (fix it from Admin → Settings)" "Folderul $d nu există (îl poți corecta din Administrare → Setări)")"; continue; }
     if ! runuser -u $USR -- test -r "$d" -a -x "$d" 2>/dev/null || ! runuser -u $USR -- ls "$d" >/dev/null 2>&1; then
-      say "Dau acces de citire utilizatorului '$USR' la $d (ACL)…"
+      say "$(_t "Granting read access for user '$USR' to $d (ACL)…" "Dau acces de citire utilizatorului '$USR' la $d (ACL)…")"
       p="$d"; while [ "$p" != "/" ]; do p=$(dirname "$p"); setfacl -m u:$USR:x "$p" 2>/dev/null || true; done
       setfacl -R -m u:$USR:rX "$d" 2>/dev/null || true
       setfacl -R -d -m u:$USR:rX "$d" 2>/dev/null || true
@@ -9517,7 +9541,7 @@ if [ -n "${MIGRATED:-}" ]; then
   id cinemo >/dev/null 2>&1 && userdel cinemo 2>/dev/null || true
 fi
 if [ $UPDATE = 0 ]; then
-  say "Configurez serverul…"
+  say "$(_t "Configuring server…" "Configurez serverul…")"
   runuser -u $USR -- env CINEVERSE_DATA="$DATA" "$APP/venv/bin/python" "$APP/server.py" setup \
     --admin-user "$CINEVERSE_ADMIN" --admin-pass "$CINEVERSE_PASS" --media-dirs "$CINEVERSE_MEDIA" \
     --tmdb-key "${TMDB_KEY:-}" --os-key "${OS_KEY:-}" --os-user "${OS_USER:-}" --os-pass "${OS_PASS:-}" >/dev/null
@@ -9555,25 +9579,25 @@ systemctl enable $SVC >/dev/null 2>&1
 systemctl restart $SVC
 
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "Port $CINEVERSE_PORT deschis în ufw"
-  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "mDNS (5353/udp) permis – pentru descoperirea Chromecast"
+  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "$(_t "Port $CINEVERSE_PORT opened in ufw" "Port $CINEVERSE_PORT deschis în ufw")"
+  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "$(_t "mDNS (5353/udp) allowed – for Chromecast discovery" "mDNS (5353/udp) permis – pentru descoperirea Chromecast")"
 fi
 
-say "Aștept pornirea…"
+say "$(_t "Waiting for startup…" "Aștept pornirea…")"
 for i in $(seq 1 30); do curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/" && break; sleep 1; done
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 if curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/"; then
   echo
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
-  echo -e "  ${G}CineVerse by NetStreaming rulează!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
+  echo -e "  ${G}CineVerse by NetStreaming $(_t "is running" "rulează")!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
   if [ $UPDATE = 0 ]; then
-    echo -e "  Utilizator: ${B}$CINEVERSE_ADMIN${N}"
-    [ -n "${GEN_PASS:-}" ] && echo -e "  Parolă generată: ${B}$CINEVERSE_PASS${N}"
+    echo -e "  $(_t "Username" "Utilizator"): ${B}$CINEVERSE_ADMIN${N}"
+    [ -n "${GEN_PASS:-}" ] && echo -e "  $(_t "Generated password" "Parolă generată"): ${B}$CINEVERSE_PASS${N}"
   fi
   VA=$(runuser -u $USR -- vainfo 2>/dev/null | grep -c VAEntrypointEncSlice || true)
-  [ "${VA:-0}" -gt 0 ] && echo -e "  Transcodare hardware: ${G}VAAPI disponibil${N}" || echo -e "  Transcodare hardware: vezi Administrare → Bibliotecă"
-  echo -e "  Loguri:  ${B}journalctl -u $SVC -f${N}"
+  [ "${VA:-0}" -gt 0 ] && echo -e "  $(_t "Hardware transcoding" "Transcodare hardware"): ${G}VAAPI $(_t "available" "disponibil")${N}" || echo -e "  $(_t "Hardware transcoding: see Admin → Library" "Transcodare hardware: vezi Administrare → Bibliotecă")"
+  echo -e "  $(_t "Logs" "Loguri"):  ${B}journalctl -u $SVC -f${N}"
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
 else
-  die "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager"
+  die "$(_t "Service did not start. Check:  journalctl -u $SVC -n 50 --no-pager" "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager")"
 fi
