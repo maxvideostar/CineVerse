@@ -1917,6 +1917,13 @@ from contextlib import asynccontextmanager
 async def lifespan(_app):
     _startup()
     yield
+    # shutdown: opreste toate sesiunile live ca sa elibereze tunere TVheadend
+    for ls in list(LIVE.values()):
+        try:
+            ls.stop()
+        except Exception:
+            pass
+    LIVE.clear()
 
 
 def _startup():

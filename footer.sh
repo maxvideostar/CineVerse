@@ -63,6 +63,8 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true
+KillMode=control-group
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
