@@ -3603,12 +3603,19 @@ class LiveSession:
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.terminate()
-                self.proc.wait(4)
-            except Exception:
                 try:
-                    self.proc.kill()
-                except Exception:
+                    self.proc.wait(4)
+                except subprocess.TimeoutExpired:
                     pass
+            except Exception:
+                pass
+            # daca inca mai traieste, kill fortat
+            try:
+                if self.proc.poll() is None:
+                    self.proc.kill()
+                    self.proc.wait(2)
+            except Exception:
+                pass
         self.proc = None
         if not keep:
             shutil.rmtree(self.dir, ignore_errors=True)
