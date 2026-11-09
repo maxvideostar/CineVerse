@@ -3749,7 +3749,7 @@ class LiveSession:
                         log.info("TV Live: %s (%s) pornit – %s", self.ch["name"], self.variant, self.method)
                         self.err = ""
                         return True
-                    if self.proc.poll() is not None:
+                    if self.proc is None or self.proc.poll() is not None:
                         break
                     time.sleep(0.2)
                 self.err = (self.dir.parent / f"{self.dir.name}.log").read_text(errors="ignore")[-300:] or "Sursa nu a trimis date"
