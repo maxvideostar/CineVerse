@@ -3643,6 +3643,7 @@ def live_janitor():
         for key, ls in list(LIVE.items()):
             idle = now - ls.last
             if idle > max(5, int(S("live_idle") or 10)) and key not in used:
+                log.info("TV Live: janitor opreste %s/%s (idle %.0fs)", key[0], key[1], idle)
                 ls.stop()
                 LIVE.pop(key, None)
             elif not ls.alive() and idle < 20 and ls.restarts < 5:   # sursa a cazut, dar cineva se uita -> repornim
@@ -3774,10 +3775,20 @@ async def live_stop(req: Request):
         d = {}
     cid = int(d.get("channel", 0))
     variant = d.get("quality", "orig")
-    ls = LIVE.get((cid, variant))
+    key = (cid, variant)
+    ls = LIVE.get(key)
     if ls:
-        ls.last = 0  # expire immediately on next janitor tick
-    ACTIVE.pop(u["id"], None)
+        # verifica daca alt user se mai uita la acelasi canal
+        with ALOCK:
+            other_viewers = sum(1 for uid, e in ACTIVE.items() if uid != u["id"] and e.get("live_ch") == cid)
+        if other_viewers == 0:
+            log.info("TV Live: stop %s/%s (beacon/delete)", cid, variant)
+            ls.stop()
+            LIVE.pop(key, None)
+        else:
+            ls.last = time.time()  # altcineva se uita, nu opri
+    with ALOCK:
+        ACTIVE.pop((u["id"], d.get("client", "web")), None)
     return {"ok": True}
 
 @app.get("/api/live/s/{cid}/{variant}/{name}")
