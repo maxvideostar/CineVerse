@@ -3910,6 +3910,7 @@ async def live_play(req: Request):
 
 
 @app.delete("/api/live/play")
+@app.post("/api/live/stop_beacon")
 async def live_stop(req: Request):
     u = need_live_user(req)
     try:
@@ -7067,7 +7068,17 @@ async function stopStream(){
   if(hls){hls.destroy();hls=null}
   V.removeAttribute("src");V.load();
   if(P.sid){const s=P.sid;P.sid=null;api("/api/play/"+s,{method:"DELETE"}).catch(()=>{})}
-  if(P.live&&P.liveCh){const cid=P.liveCh,q=P.quality||"orig";api("/api/live/play",{method:"DELETE",body:{channel:cid,quality:q}}).catch(()=>{})}
+  if(P.live&&P.liveCh){
+    const cid=P.liveCh,q=P.quality||"orig";
+    const payload=JSON.stringify({channel:cid,quality:q});
+    // sendBeacon garanteaza trimiterea chiar si la navigare/inchidere pagina
+    if(navigator.sendBeacon){
+      const blob=new Blob([payload],{type:"application/json"});
+      navigator.sendBeacon("/api/live/stop_beacon",blob);
+    } else {
+      api("/api/live/play",{method:"DELETE",body:{channel:cid,quality:q}}).catch(()=>{});
+    }
+  }
 }
 
 /* ---- TV Live playback ---- */

@@ -3738,6 +3738,7 @@ async def live_play(req: Request):
 
 
 @app.delete("/api/live/play")
+@app.post("/api/live/stop_beacon")
 async def live_stop(req: Request):
     u = need_live_user(req)
     try:
