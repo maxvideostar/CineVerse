@@ -3620,7 +3620,10 @@ def live_session(ch, variant):
             LIVE[key] = ls
     ls.last = time.time()
     if not ls.alive() and not ls.start():
-        ls.last = 0  # nu tine tunerul ocupat daca pornirea a esuat
+        # opreste imediat si scoate din LIVE ca sa nu blocheze tunerul
+        ls.stop()
+        with LIVE_LOCK:
+            LIVE.pop(key, None)
         raise HTTPException(502, f"Canalul {ch['name']} nu poate fi pornit: {ls.err[:160]}")
     return ls
 
