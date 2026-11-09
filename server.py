@@ -3802,6 +3802,13 @@ def _live_serve(cid, variant, name, headers):
     ls.last = time.time()
     p = ls.dir / name
     if name.endswith(".m3u8"):
+        # asteapta pana la 5s ca index.m3u8 sa apara si sa aiba cel putin 2 segmente
+        for _ in range(25):
+            if ls.ready():
+                break
+            if not ls.alive():
+                break
+            time.sleep(0.2)
         if not p.exists():
             raise HTTPException(404)
         return Response(p.read_text(errors="ignore"), media_type="application/vnd.apple.mpegurl", headers=headers)
