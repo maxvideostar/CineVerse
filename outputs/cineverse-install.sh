@@ -3029,7 +3029,7 @@ def media_info(media_id: int, req: Request):
     m = need_media(u, q("SELECT m.*, i.title as it_title, i.kind, i.logo FROM media m JOIN items i ON i.id=m.item_id WHERE m.id=?", (media_id,), one=True))
     if not m:
         raise HTTPException(404)
-    sub = f"S{m['season']}:E{m['episode']} \"{m['ep_title'] or ''}\"" if m["kind"] == "series" else ""
+    sub = (f"S{m['season']}:E{m['episode']} {m['ep_title'] or ''}" if m["kind"] == "series" else "")
     return {"id": m["id"], "item_id": m["item_id"], "title": m["it_title"], "subtitle": sub, "kind": m["kind"]}
 
 
