@@ -3567,8 +3567,11 @@ class LiveSession:
             hws = ([HW["mode"]] if HW["mode"] in ("vaapi", "nvenc", "qsv", "amf") else []) + ["none"]
             # cu subtitrare arsa intai; daca nu merge pe nicio varianta, fara subtitrare
             plans = ([(hw, True) for hw in hws] if self.burn_wanted() else []) + [(hw, False) for hw in hws]
+            copy_done = 0
             for hw, burn in plans:
                 self.burn = burn
+                shutil.rmtree(self.dir, ignore_errors=True)
+                self.dir.mkdir(parents=True, exist_ok=True)
                 self.proc = subprocess.Popen(self.build(hw), stdout=subprocess.DEVNULL, stderr=open(self.dir.parent / f"{self.dir.name}.log", "wb"),
                                              cwd=str(TRANS), **popen_kw())
                 t0 = time.time()
@@ -3583,7 +3586,9 @@ class LiveSession:
                 self.err = (self.dir.parent / f"{self.dir.name}.log").read_text(errors="ignore")[-300:] or "Sursa nu a trimis date"
                 self.stop(keep=True)
                 if "copy" in self.method.lower():
-                    break
+                    copy_done += 1
+                    if copy_done >= 2:  # max 2 copy attempts (first packet often corrupt)
+                        break
             log.warning("TV Live: %s nu a pornit: %s", self.ch["name"], self.err)
             return False
 
