@@ -3783,7 +3783,8 @@ def live_session(ch, variant):
             LIVE[key] = ls
     ls.last = time.time()
     if not ls.alive() and not ls.start():
-        raise HTTPException(502, f"Canalul „{ch['name']}” nu poate fi pornit: {ls.err[:160]}")
+        ls.last = 0  # nu tine tunerul ocupat daca pornirea a esuat
+        raise HTTPException(502, f”Canalul „{ch['name']}” nu poate fi pornit: {ls.err[:160]}”)
     return ls
 
 
