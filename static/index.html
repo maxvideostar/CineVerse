@@ -1488,7 +1488,11 @@ async function playLive(cid){
   await stopStream();
   let d;
   try{d=await api("/api/live/play",{method:"POST",body:{channel:cid,client:CLIENT,quality:pref("quality","")}})}
-  catch(e){spin(false);if(!ME)return;toast(e.message,6000);pl.classList.add("hidden");pl.classList.remove("live");if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});return}
+  catch(e){
+    // retry automat o data dupa 1.5s (TVheadend poate fi ocupat cu eliberarea tunerului)
+    try{await new Promise(r=>setTimeout(r,1500));d=await api("/api/live/play",{method:"POST",body:{channel:cid,client:CLIENT,quality:pref("quality","")}})}
+    catch(e2){spin(false);if(!ME)return;toast(e2.message,6000);pl.classList.add("hidden");pl.classList.remove("live");if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});return}
+  }
   Object.assign(P,{live:true,media:null,liveCh:cid,method:d.method,quality:d.quality,qualities:d.qualities||[],remote:d.remote});
   $("#ptitle").innerHTML=`<b>📺 ${esc(d.channel.name)}</b>${d.channel.now?`<span>${esc(d.channel.now.title)}</span>`:""}`;
   $("#nextep").classList.add("hidden");P.nextShown=false;
