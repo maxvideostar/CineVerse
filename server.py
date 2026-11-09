@@ -3513,7 +3513,7 @@ class LiveSession:
         if not pr.get("vcodec"):
             cmd += ["-map", "0:a:0?", "-sn", "-dn", "-vn"]
         elif copy:
-            cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy"]
+            cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-ar", "48000"]
             self.method = "Remux (video copiat)"
         else:
             # filtrele de dupa deinterlace, specifice fiecarui encoder
