@@ -3721,7 +3721,7 @@ class LiveSession:
             self.method = (f"Transcodare – {'GPU (' + hw.upper() + ')' if hw in ('vaapi', 'nvenc', 'qsv', 'amf') else 'CPU'}"
                            + (" + subtitrare" if self.burn else ""))
         cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-ar", "48000",
-                "-f", "hls", "-hls_time", "4", "-hls_list_size", "8", "-hls_delete_threshold", "4",
+                "-f", "hls", "-hls_time", "4", "-hls_list_size", "20", "-hls_delete_threshold", "10",
                 "-hls_flags", "delete_segments+independent_segments+omit_endlist",
                 "-hls_segment_filename", str(self.dir / "s%06d.ts"), str(self.dir / "index.m3u8")]
         return cmd
