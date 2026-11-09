@@ -7138,7 +7138,7 @@ async function closePlayer(){
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   cues=[];renderSubs(true);route();
 }
-addEventListener("beforeunload",()=>{if(P.media)saveProgress(true)});
+addEventListener("beforeunload",()=>{if(P.media)saveProgress(true);if(P.live&&P.liveCh){const payload=JSON.stringify({channel:P.liveCh,quality:P.quality||"orig"});if(navigator.sendBeacon)navigator.sendBeacon("/api/live/stop_beacon",new Blob([payload],{type:"application/json"}))}});
 function spin(on){$("#pspin").classList.toggle("hidden",!on)}
 V.addEventListener("waiting",()=>spin(true));V.addEventListener("playing",()=>spin(false));V.addEventListener("canplay",()=>spin(false));
 V.addEventListener("play",()=>{updPP();setTimeout(()=>saveProgress(),300)});V.addEventListener("pause",()=>{updPP();showUI(true);saveProgress()});
