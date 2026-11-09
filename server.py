@@ -3790,6 +3790,11 @@ def _live_serve(cid, variant, name, headers):
         if not p.exists():
             raise HTTPException(404)
         return Response(p.read_text(errors="ignore"), media_type="application/vnd.apple.mpegurl", headers=headers)
+    # asteapta pana la 3s ca segmentul .ts sa apara (ffmpeg poate intarzia la primul segment)
+    for _ in range(15):
+        if p.exists():
+            break
+        time.sleep(0.2)
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(p, media_type="video/mp2t", headers=headers)
