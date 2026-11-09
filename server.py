@@ -3738,9 +3738,12 @@ async def live_play(req: Request):
 
 
 @app.delete("/api/live/play")
-def live_stop(req: Request):
+async def live_stop(req: Request):
     u = need_live_user(req)
-    d = body(req)
+    try:
+        d = await req.json()
+    except Exception:
+        d = {}
     cid = int(d.get("channel", 0))
     variant = d.get("quality", "orig")
     ls = LIVE.get((cid, variant))
