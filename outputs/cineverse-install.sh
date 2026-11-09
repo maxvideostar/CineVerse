@@ -3803,9 +3803,17 @@ def live_janitor():
             if idle > max(5, int(S("live_idle") or 10)) and key not in used:
                 ls.stop()
                 LIVE.pop(key, None)
-            elif not ls.alive() and idle < 20 and ls.restarts < 30:   # sursa a cazut, dar cineva se uita -> repornim
-                ls.restarts += 1
-                threading.Thread(target=ls.start, daemon=True).start()
+            elif not ls.alive() and idle < 20 and ls.restarts < 5:   # sursa a cazut, dar cineva se uita -> repornim
+                # reporneste doar daca exista un user activ pe acest canal
+                cid = key[0]
+                with ALOCK:
+                    has_viewer = any(e.get("live_ch") == cid for e in ACTIVE.values())
+                if has_viewer:
+                    ls.restarts += 1
+                    threading.Thread(target=ls.start, daemon=True).start()
+                else:
+                    ls.stop()
+                    LIVE.pop(key, None)
 
 
 def epg_now(tvg_ids):
