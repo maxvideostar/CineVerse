@@ -3570,7 +3570,7 @@ class LiveSession:
             for hw, burn in plans:
                 self.burn = burn
                 self.proc = subprocess.Popen(self.build(hw), stdout=subprocess.DEVNULL, stderr=open(self.dir.parent / f"{self.dir.name}.log", "wb"),
-                                             **popen_kw())
+                                             cwd=str(TRANS), **popen_kw())
                 t0 = time.time()
                 while time.time() - t0 < 30:
                     if self.ready():
