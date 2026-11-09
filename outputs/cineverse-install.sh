@@ -3796,6 +3796,19 @@ def live_session(ch, variant):
         ls.stop()
         with LIVE_LOCK:
             LIVE.pop(key, None)
+        # daca sursa a dat End of file, TVheadend poate fi ocupat – asteptam si reincercam o data
+        if "End of file" in ls.err or "end of file" in ls.err.lower():
+            time.sleep(3)
+            ls2 = LiveSession(ch, variant)
+            with LIVE_LOCK:
+                LIVE[key] = ls2
+            ls2.last = time.time()
+            if not ls2.start():
+                ls2.stop()
+                with LIVE_LOCK:
+                    LIVE.pop(key, None)
+                raise HTTPException(502, f"Canalul {ch['name']} nu poate fi pornit: {ls2.err[:160]}")
+            return ls2
         raise HTTPException(502, f"Canalul {ch['name']} nu poate fi pornit: {ls.err[:160]}")
     return ls
 
