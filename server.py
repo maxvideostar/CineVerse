@@ -37,6 +37,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".webm", ".mpg", ".mpeg", ".flv", ".ogv", ".divx", ".3gp"}
 SUB_EXT = {".srt", ".vtt", ".ass", ".ssa", ".sub"}
+BITMAP_LIVE_SUBS = {"dvb_subtitle", "dvd_subtitle", "hdmv_pgs_subtitle"}
 TEXT_SUB_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
 RO_CODES = {"ro", "rum", "ron", "romanian", "romana", "română", "rom"}
 TMDB_IMG_SIZES = {"w92", "w154", "w185", "w300", "w342", "w500", "w780", "w1280", "h632", "original"}
@@ -52,6 +53,8 @@ DEFAULT_SETTINGS = {
     "cast_hosts": "",      # IP-uri Chromecast (optional, daca mDNS nu merge)
     "epg_urls": "",        # surse XMLTV (una pe linie)
     "live_refresh": "12",  # ore intre reimprospatarile listelor M3U
+    "live_idle": "10",     # secunde fara spectatori dupa care se opreste ffmpeg-ul unui canal (elibereaza tunerul DVB)
+    "live_burn_subs": "1", # arde in imagine subtitrarea DVB (bitmap) a canalelor live, daca exista
     "remote_enabled": "1", "remote_max": "4M",
     "download_mode": "all",   # all = LAN liber + extern limitat la bitrate; lan = doar LAN; off = dezactivat
     # securitate
@@ -3453,15 +3456,17 @@ def live_probe(url, ua=""):
         return {"ok": False, "error": str(e)}
     v = next((x_ for x_ in d.get("streams", []) if x_.get("codec_type") == "video" and not (x_.get("disposition") or {}).get("attached_pic")), None)
     a = next((x_ for x_ in d.get("streams", []) if x_.get("codec_type") == "audio"), None)
+    subs = [x_.get("codec_name") for x_ in d.get("streams", []) if x_.get("codec_type") == "subtitle"]
     if not v and not a:
         return {"ok": False, "error": "Nu am putut citi stream-ul (verifică URL-ul)"}
     return {"ok": True, "vcodec": (v or {}).get("codec_name"), "width": (v or {}).get("width"), "height": (v or {}).get("height"),
-            "pix_fmt": (v or {}).get("pix_fmt"), "acodec": (a or {}).get("codec_name"), "channels": (a or {}).get("channels"), "t": time.time()}
+            "pix_fmt": (v or {}).get("pix_fmt"), "acodec": (a or {}).get("codec_name"), "channels": (a or {}).get("channels"),
+            "subs": subs, "t": time.time()}
 
 
 def ch_probe(ch):
     pr = json.loads(ch["probe"] or "{}") if ch["probe"] else {}
-    if not pr.get("ok") or time.time() - pr.get("t", 0) > 86400:
+    if not pr.get("ok") or "subs" not in pr or time.time() - pr.get("t", 0) > 86400:
         pr = live_probe(ch["url"], ch["ua"])
         if pr.get("ok"):
             x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps(pr), ch["id"]))
@@ -3476,6 +3481,12 @@ class LiveSession:
         self.proc, self.last, self.method, self.err, self.restarts = None, time.time(), "", "", 0
         self.lock = threading.Lock()
         self.probe = {}
+        self.burn = False
+
+    def burn_wanted(self):
+        """Subtitrare bitmap (DVB/DVD/PGS) de ars in imagine – doar pentru varianta video transcodata."""
+        return S("live_burn_subs") == "1" and bool(self.probe.get("vcodec")) and \
+            any(c in BITMAP_LIVE_SUBS for c in (self.probe.get("subs") or []))
 
     def build(self, hw):
         ch, pr = self.ch, self.probe
@@ -3489,6 +3500,8 @@ class LiveSession:
         copy = pr.get("vcodec") and ch["mode"] != "transcode" and not ql and vc == "h264" and (pr.get("pix_fmt") or "yuv420p") in ("yuv420p", "yuvj420p")
         if ch["mode"] == "copy" and not ql:
             copy = True
+        if self.burn:
+            copy = False   # subtitrarea arsa cere transcodare
         h0 = pr.get("height") or 720
         maxh = min(int(S("max_height") or 1080), ql[2] if ql else 10000)
         h = min(h0, maxh)
@@ -3496,30 +3509,38 @@ class LiveSession:
         vb = (max(150, int(ql[1] / 1000 * 0.95) - ql[3]) if ql else int(float((S("bitrate") or "8M").rstrip("M")) * 1000))
         if not copy and hw == "vaapi":
             cmd += ["-init_hw_device", f"vaapi=va:{S('vaapi_device')}", "-filter_hw_device", "va"]
-        cmd += ["-fflags", "+genpts+discardcorrupt", "-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn"]
+        cmd += ["-fflags", "+genpts+discardcorrupt", "-i", url]
         if not pr.get("vcodec"):
-            cmd += ["-vn"]
+            cmd += ["-map", "0:a:0?", "-sn", "-dn", "-vn"]
         elif copy:
-            cmd += ["-c:v", "copy"]
+            cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy"]
             self.method = "Remux (video copiat)"
         else:
-            vf = f"yadif=deint=interlaced,scale=-2:{h},format=yuv420p"
-            if hw == "vaapi":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12,hwupload", "-c:v", "h264_vaapi", "-b:v", f"{vb}k",
-                        "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "nvenc":
-                cmd += ["-vf", vf, "-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "qsv":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12,hwupload=extra_hw_frames=64", "-c:v", "h264_qsv",
-                        "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "amf":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12", "-c:v", "h264_amf", "-usage", "transcoding",
-                        "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            # filtrele de dupa deinterlace, specifice fiecarui encoder
+            tail = {"vaapi": f"scale=-2:{h},format=nv12,hwupload",
+                    "qsv": f"scale=-2:{h},format=nv12,hwupload=extra_hw_frames=64",
+                    "amf": f"scale=-2:{h},format=nv12"}.get(hw, f"scale=-2:{h},format=yuv420p")
+            if self.burn:
+                # subtitrarea bitmap e adusa la dimensiunea imaginii si suprapusa inainte de scalare/upload pe GPU
+                fc = ("[0:v:0]yadif=deint=interlaced[d];[0:s:0][d]scale2ref[s][d2];"
+                      f"[d2][s]overlay=eof_action=pass[o];[o]{tail}[v]")
+                cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?", "-dn"]
             else:
-                cmd += ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-b:v", f"{vb}k", "-maxrate", f"{vb}k",
+                cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-vf", f"yadif=deint=interlaced,{tail}"]
+            if hw == "vaapi":
+                cmd += ["-c:v", "h264_vaapi", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "nvenc":
+                cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "qsv":
+                cmd += ["-c:v", "h264_qsv", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "amf":
+                cmd += ["-c:v", "h264_amf", "-usage", "transcoding", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            else:
+                cmd += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-b:v", f"{vb}k", "-maxrate", f"{vb}k",
                         "-bufsize", f"{vb * 2}k", "-sc_threshold", "0"]
             cmd += ["-g", "50", "-force_key_frames", "expr:gte(t,n_forced*2)"]
-            self.method = f"Transcodare – {'GPU (' + hw.upper() + ')' if hw in ('vaapi', 'nvenc', 'qsv', 'amf') else 'CPU'}"
+            self.method = (f"Transcodare – {'GPU (' + hw.upper() + ')' if hw in ('vaapi', 'nvenc', 'qsv', 'amf') else 'CPU'}"
+                           + (" + subtitrare" if self.burn else ""))
         cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-ar", "48000",
                 "-f", "hls", "-hls_time", "4", "-hls_list_size", "8", "-hls_delete_threshold", "4",
                 "-hls_flags", "delete_segments+independent_segments+temp_file+omit_endlist",
@@ -3543,8 +3564,11 @@ class LiveSession:
             if not self.probe.get("ok"):
                 self.err = self.probe.get("error", "Sursa nu răspunde")
                 return False
-            plans = ([HW["mode"]] if HW["mode"] in ("vaapi", "nvenc", "qsv", "amf") else []) + ["none"]
-            for hw in plans:
+            hws = ([HW["mode"]] if HW["mode"] in ("vaapi", "nvenc", "qsv", "amf") else []) + ["none"]
+            # cu subtitrare arsa intai; daca nu merge pe nicio varianta, fara subtitrare
+            plans = ([(hw, True) for hw in hws] if self.burn_wanted() else []) + [(hw, False) for hw in hws]
+            for hw, burn in plans:
+                self.burn = burn
                 self.proc = subprocess.Popen(self.build(hw), stdout=subprocess.DEVNULL, stderr=open(self.dir.parent / f"{self.dir.name}.log", "wb"),
                                              **popen_kw())
                 t0 = time.time()
@@ -3593,12 +3617,12 @@ def live_session(ch, variant):
 
 def live_janitor():
     while True:
-        time.sleep(4)
+        time.sleep(2)
         now = time.time()
         used = set(LIVE_TOKENS.values())
         for key, ls in list(LIVE.items()):
             idle = now - ls.last
-            if idle > 45 and key not in used:
+            if idle > max(5, int(S("live_idle") or 10)) and key not in used:
                 ls.stop()
                 LIVE.pop(key, None)
             elif not ls.alive() and idle < 20 and ls.restarts < 30:   # sursa a cazut, dar cineva se uita -> repornim

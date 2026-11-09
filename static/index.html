@@ -1489,7 +1489,7 @@ async function playLive(cid){
     hls.loadSource(d.url);hls.attachMedia(V);
   } else {V.src=d.url;V.play().catch(()=>{spin(false)})}
   V.volume=pref("vol",1);V.muted=pref("muted",false);$("#rvol").value=V.volume;updVol();
-  showUI();clearInterval(saveT);clearInterval(liveT);liveT=setInterval(livePing,10000);livePing();
+  showUI();clearInterval(saveT);clearInterval(liveT);liveT=setInterval(livePing,4000);livePing();
 }
 function livePing(){
   if(!P.live)return;
