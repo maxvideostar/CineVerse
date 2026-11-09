@@ -3602,18 +3602,8 @@ class LiveSession:
     def stop(self, keep=False):
         if self.proc and self.proc.poll() is None:
             try:
-                self.proc.terminate()
-                try:
-                    self.proc.wait(4)
-                except subprocess.TimeoutExpired:
-                    pass
-            except Exception:
-                pass
-            # daca inca mai traieste, kill fortat
-            try:
-                if self.proc.poll() is None:
-                    self.proc.kill()
-                    self.proc.wait(2)
+                self.proc.kill()   # SIGKILL direct, nu SIGTERM - ffmpeg ignora SIGTERM
+                self.proc.wait(2)
             except Exception:
                 pass
         self.proc = None
