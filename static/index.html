@@ -1466,6 +1466,7 @@ async function stopStream(){
   if(hls){hls.destroy();hls=null}
   V.removeAttribute("src");V.load();
   if(P.sid){const s=P.sid;P.sid=null;api("/api/play/"+s,{method:"DELETE"}).catch(()=>{})}
+  if(P.live&&P.liveCh){const cid=P.liveCh,q=P.quality||"orig";api("/api/live/play",{method:"DELETE",body:{channel:cid,quality:q}}).catch(()=>{})}
 }
 
 /* ---- TV Live playback ---- */

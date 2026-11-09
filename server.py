@@ -3736,6 +3736,18 @@ async def live_play(req: Request):
             "qualities": ([] if remote else [{"key": "orig", "label": "Original"}]) + [{"key": x_[0], "label": x_[4]} for x_ in allowed]}
 
 
+@app.delete("/api/live/play")
+def live_stop(req: Request):
+    u = need_live_user(req)
+    d = body(req)
+    cid = int(d.get("channel", 0))
+    variant = d.get("quality", "orig")
+    ls = LIVE.get((cid, variant))
+    if ls:
+        ls.last = 0  # expire immediately on next janitor tick
+    ACTIVE.pop(u["id"], None)
+    return {"ok": True}
+
 @app.get("/api/live/s/{cid}/{variant}/{name}")
 def live_file(cid: int, variant: str, name: str, req: Request):
     u = need_live_user(req)
