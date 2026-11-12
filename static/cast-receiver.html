@@ -6,7 +6,8 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #000; width: 100vw; height: 100vh; overflow: hidden; font-family: Arial, sans-serif; }
-cast-media-player { width: 100vw; height: 100vh; display: block; }
+cast-media-player { width: 100vw; height: 100vh; display: block; opacity: 0; transition: opacity 0.6s; }
+cast-media-player.visible { opacity: 1; }
 #splash {
   position: fixed;
   inset: 0;
@@ -38,7 +39,10 @@ cast-media-player { width: 100vw; height: 100vh; display: block; }
 var context = cast.framework.CastReceiverContext.getInstance();
 context.getPlayerManager().addEventListener(
   cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
-  function() { document.getElementById('splash').classList.add('hidden'); }
+  function() {
+    document.getElementById('splash').classList.add('hidden');
+    document.querySelector('cast-media-player').classList.add('visible');
+  }
 );
 context.start();
 </script>
