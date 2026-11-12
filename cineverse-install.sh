@@ -20,20 +20,44 @@ DATA=/var/lib/cineverse
 SVC=cineverse
 USR=cineverse
 G='\e[1;32m'; R='\e[1;31m'; Y='\e[1;33m'; B='\e[1;36m'; N='\e[0m'
+
+# ---- language selection / selectare limbă
+_pick_lang(){
+  echo -e "\n${B}Select language / Selectează limba:${N}"
+  echo "  1) English"
+  echo "  2) Română"
+  local ch
+  TTY_L=""; ( : </dev/tty ) 2>/dev/null && TTY_L=/dev/tty
+  if [ -n "$TTY_L" ]; then
+    read -rp "  Choice / Alegere [1/2, default=1]: " ch <"$TTY_L"
+  else ch="1"; fi
+  case "${ch:-1}" in
+    2) LANG_CV=ro ;;
+    *) LANG_CV=en ;;
+  esac
+}
+[ -n "${LANG_CV:-}" ] || _pick_lang
+
+# ---- i18n helpers
+_t(){
+  # _t en_string ro_string
+  if [ "${LANG_CV:-en}" = "ro" ]; then echo "$2"; else echo "$1"; fi
+}
+
 say(){ echo -e "${B}==>${N} $*"; }
 ok(){ echo -e "${G}✔${N} $*"; }
 warn(){ echo -e "${Y}!${N} $*"; }
 die(){ echo -e "${R}✘ $*${N}"; exit 1; }
 
-[ "$(id -u)" = 0 ] || die "Rulează cu sudo:  sudo bash $0"
+[ "$(id -u)" = 0 ] || die "$(_t "Run with sudo:  sudo bash $0" "Rulează cu sudo:  sudo bash $0")"
 
 if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now $SVC 2>/dev/null || true
   rm -f /etc/systemd/system/$SVC.service; systemctl daemon-reload
   rm -rf "$APP"
-  a=n; ( : </dev/tty ) 2>/dev/null && read -rp "Șterg și baza de date / cache-ul din $DATA? [y/N] " a </dev/tty
+  a=n; ( : </dev/tty ) 2>/dev/null && read -rp "$(_t "Also delete database / cache from $DATA? [y/N] " "Șterg și baza de date / cache-ul din $DATA? [y/N] ")" a </dev/tty
   [[ "$a" =~ ^[yY] ]] && rm -rf "$DATA" && userdel $USR 2>/dev/null || true
-  ok "CineVerse a fost dezinstalat."; exit 0
+  ok "$(_t "CineVerse has been uninstalled." "CineVerse a fost dezinstalat.")"; exit 0
 fi
 
 TTY=""; ( : </dev/tty ) 2>/dev/null && TTY=/dev/tty
@@ -41,14 +65,14 @@ TTY=""; ( : </dev/tty ) 2>/dev/null && TTY=/dev/tty
 if [ "${1:-}" = "--reset-admin" ]; then
   [ -f "$DATA/cineverse.db" ] || die "CineVerse nu este instalat."
   [ -n "$TTY" ] || die "Rulează comanda într-un terminal."
-  read -rp "Nume cont administrator: " RA_USER <"$TTY"
-  read -rsp "Parolă nouă: " RA_PASS <"$TTY"; echo
-  [ -n "$RA_USER" ] && [ ${#RA_PASS} -ge 4 ] || die "Nume și parolă (min. 4 caractere) obligatorii."
+  read -rp "$(_t "Administrator account name: " "Nume cont administrator: ")" RA_USER <"$TTY"
+  read -rsp "$(_t "New password: " "Parolă nouă: ")" RA_PASS <"$TTY"; echo
+  [ -n "$RA_USER" ] && [ ${#RA_PASS} -ge 4 ] || die "$(_t "Name and password (min. 4 chars) are required." "Nume și parolă (min. 4 caractere) obligatorii.")"
   runuser -u $USR -- env CINEVERSE_DATA="$DATA" "$APP/venv/bin/python" "$APP/server.py" setup --admin-user "$RA_USER" --admin-pass "$RA_PASS" >/dev/null
   systemctl restart $SVC
-  ok "Contul '$RA_USER' este acum singurul administrator (parola a fost schimbată, sesiunile vechi închise)."; exit 0
+  ok "$(_t "Account '$RA_USER' is now the sole administrator (password changed, old sessions closed)." "Contul '$RA_USER' este acum singurul administrator (parola a fost schimbată, sesiunile vechi închise).")"; exit 0
 fi
-ask(){ # ask VAR "Întrebare" "implicit" [secret]
+ask(){ # ask VAR "Question" "default" [secret]
   local var=$1 q=$2 def=${3:-} val
   if [ -n "${!var:-}" ]; then return; fi
   if [ -n "$TTY" ]; then
@@ -71,7 +95,7 @@ echo -e "${N}                                              ${B}by NetStreaming${
 # ---- migrare automata din vechea instalare "Cinemo"
 OLD_DATA=/var/lib/cinemo
 if [ $UPDATE = 0 ] && [ -f "$OLD_DATA/cinemo.db" ]; then
-  say "Am găsit instalarea Cinemo – o mut în CineVerse (setări, bibliotecă, utilizatori, progres, subtitrări)…"
+  say "$(_t "Found Cinemo installation – migrating to CineVerse (settings, library, users, progress, subtitles)…" "Am găsit instalarea Cinemo – o mut în CineVerse (setări, bibliotecă, utilizatori, progres, subtitrări)…")"
   OLD_PORT=$(sed -n 's/^Environment=CINEMO_PORT=//p' /etc/systemd/system/cinemo.service 2>/dev/null || true)
   systemctl disable --now cinemo >/dev/null 2>&1 || true
   mkdir -p "$DATA"
@@ -90,53 +114,53 @@ PYMIG
   rm -rf /opt/cinemo
   CINEVERSE_PORT=${OLD_PORT:-8200}
   UPDATE=1; MIGRATED=1
-  ok "Datele au fost copiate. Vechiul folder $OLD_DATA a rămas ca backup (îl poți șterge după ce verifici)."
+  ok "$(_t "Data copied. Old folder $OLD_DATA kept as backup (you can delete it after verifying)." "Datele au fost copiate. Vechiul folder $OLD_DATA a rămas ca backup (îl poți șterge după ce verifici).")"
 fi
 
 if [ $UPDATE = 1 ] && [ -z "${MIGRATED:-}" ]; then
-  say "Instalare existentă găsită – actualizez aplicația (setările și biblioteca rămân)."
+  say "$(_t "Existing installation found – updating app (settings and library are preserved)." "Instalare existentă găsită – actualizez aplicația (setările și biblioteca rămân).")"
   CINEVERSE_PORT=$(sed -n 's/^Environment=CINEVERSE_PORT=//p' /etc/systemd/system/$SVC.service 2>/dev/null || true)
   CINEVERSE_PORT=${CINEVERSE_PORT:-8200}
 elif [ -n "${MIGRATED:-}" ]; then
   :
 else
-  ask CINEVERSE_PORT  "Port web" "8200"
-  ask CINEVERSE_MEDIA "Foldere cu filme/seriale (separate prin ;)" "/media"
-  ask CINEVERSE_ADMIN "Utilizator administrator" "admin"
+  ask CINEVERSE_PORT  "$(_t "Web port" "Port web")" "8200"
+  ask CINEVERSE_MEDIA "$(_t "Media folders (separated by ;)" "Foldere cu filme/seriale (separate prin ;)")" "/media"
+  ask CINEVERSE_ADMIN "$(_t "Administrator username" "Utilizator administrator")" "admin"
   while [ -z "${CINEVERSE_PASS:-}" ]; do
-    ask CINEVERSE_PASS "Parolă administrator" "" secret
+    ask CINEVERSE_PASS "$(_t "Administrator password" "Parolă administrator")" "" secret
     [ -n "$TTY" ] || { CINEVERSE_PASS=$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 12); GEN_PASS=1; }
   done
-  echo -e "\n${Y}Chei API gratuite (le poți pune și mai târziu din Administrare → Setări):${N}"
-  echo "  TMDB (postere, descrieri, actori):  https://www.themoviedb.org/settings/api"
-  echo "  OpenSubtitles (subtitrări RO):      https://www.opensubtitles.com/en/consumers"
-  ask TMDB_KEY "Cheie TMDB (Enter = sari)" ""
-  ask OS_KEY   "OpenSubtitles API key (Enter = sari)" ""
+  echo -e "\n${Y}$(_t "Free API keys (you can also add them later from Admin → Settings):" "Chei API gratuite (le poți pune și mai târziu din Administrare → Setări):")${N}"
+  echo "  TMDB ($(_t "posters, descriptions, actors" "postere, descrieri, actori")):  https://www.themoviedb.org/settings/api"
+  echo "  OpenSubtitles ($(_t "subtitles" "subtitrări RO")):      https://www.opensubtitles.com/en/consumers"
+  ask TMDB_KEY "$(_t "TMDB key (Enter = skip)" "Cheie TMDB (Enter = sari)")" ""
+  ask OS_KEY   "$(_t "OpenSubtitles API key (Enter = skip)" "OpenSubtitles API key (Enter = sari)")" ""
   if [ -n "${OS_KEY:-}" ]; then
-    ask OS_USER "OpenSubtitles utilizator (opțional, mărește limita zilnică)" ""
-    [ -n "${OS_USER:-}" ] && ask OS_PASS "OpenSubtitles parolă" "" secret
+    ask OS_USER "$(_t "OpenSubtitles username (optional, increases daily limit)" "OpenSubtitles utilizator (opțional, mărește limita zilnică)")" ""
+    [ -n "${OS_USER:-}" ] && ask OS_PASS "$(_t "OpenSubtitles password" "OpenSubtitles parolă")" "" secret
   fi
 fi
 
 # ------------------------------------------------------------------ pachete
-say "Instalez pachetele de sistem…"
+say "$(_t "Installing system packages…" "Instalez pachetele de sistem…")"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip ffmpeg curl ca-certificates acl pciutils >/dev/null
 GPU=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 if echo "$GPU" | grep -qi intel; then
-  say "GPU Intel detectat – instalez driverele VAAPI/QuickSync"
+  say "$(_t "Intel GPU detected – installing VAAPI/QuickSync drivers" "GPU Intel detectat – instalez driverele VAAPI/QuickSync")"
   grep -q multiverse /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || { add-apt-repository -y multiverse >/dev/null 2>&1 && apt-get update -qq || true; }
   apt-get install -y -qq intel-media-va-driver-non-free vainfo >/dev/null 2>&1 || apt-get install -y -qq intel-media-va-driver vainfo >/dev/null 2>&1 || true
   apt-get install -y -qq i965-va-driver >/dev/null 2>&1 || true
   apt-get install -y -qq libvpl2 libmfx-gen1.2 >/dev/null 2>&1 || apt-get install -y -qq libmfx1 >/dev/null 2>&1 || true
 fi
 if echo "$GPU" | grep -Eqi 'amd|ati|radeon'; then
-  say "GPU AMD detectat – instalez mesa-va-drivers"
+  say "$(_t "AMD GPU detected – installing mesa-va-drivers" "GPU AMD detectat – instalez mesa-va-drivers")"
   apt-get install -y -qq mesa-va-drivers vainfo >/dev/null 2>&1 || true
 fi
-echo "$GPU" | grep -qi nvidia && warn "GPU NVIDIA detectat – pentru NVENC trebuie driverul proprietar (ex: sudo ubuntu-drivers install)."
-ok "Pachete instalate"
+echo "$GPU" | grep -qi nvidia && warn "$(_t "NVIDIA GPU detected – for NVENC you need the proprietary driver (e.g. sudo ubuntu-drivers install)." "GPU NVIDIA detectat – pentru NVENC trebuie driverul proprietar (ex: sudo ubuntu-drivers install).")"
+ok "$(_t "Packages installed" "Pachete instalate")"
 
 # ------------------------------------------------------------------ utilizator sistem
 id $USR >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -d "$DATA" $USR
@@ -144,7 +168,7 @@ for g in video render; do getent group $g >/dev/null && usermod -aG $g $USR; don
 mkdir -p "$APP/static" "$DATA"
 
 # ------------------------------------------------------------------ fișierele aplicației
-say "Scriu aplicația în $APP…"
+say "$(_t "Writing application to $APP…" "Scriu aplicația în $APP…")"
 cat > "$APP/server.py" <<'CINEVERSE_PY_EOF'
 #!/usr/bin/env python3
 """CineVerse by NetStreaming - media server personal (filme + seriale), stil Netflix.
@@ -162,7 +186,7 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, PlainTex
 from starlette.background import BackgroundTask
 from urllib.parse import quote
 
-VERSION = "3.4.1"
+VERSION = "3.4.2"
 APPDIR = Path(__file__).resolve().parent
 STATIC = APPDIR / "static"
 IS_WIN = os.name == "nt"
@@ -185,6 +209,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".webm", ".mpg", ".mpeg", ".flv", ".ogv", ".divx", ".3gp"}
 SUB_EXT = {".srt", ".vtt", ".ass", ".ssa", ".sub"}
+BITMAP_LIVE_SUBS = {"dvb_subtitle", "dvd_subtitle", "hdmv_pgs_subtitle"}
 TEXT_SUB_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
 RO_CODES = {"ro", "rum", "ron", "romanian", "romana", "română", "rom"}
 TMDB_IMG_SIZES = {"w92", "w154", "w185", "w300", "w342", "w500", "w780", "w1280", "h632", "original"}
@@ -200,6 +225,8 @@ DEFAULT_SETTINGS = {
     "cast_hosts": "",      # IP-uri Chromecast (optional, daca mDNS nu merge)
     "epg_urls": "",        # surse XMLTV (una pe linie)
     "live_refresh": "12",  # ore intre reimprospatarile listelor M3U
+    "live_idle": "10",     # secunde fara spectatori dupa care se opreste ffmpeg-ul unui canal (elibereaza tunerul DVB)
+    "live_burn_subs": "1", # arde in imagine subtitrarea DVB (bitmap) a canalelor live, daca exista
     "remote_enabled": "1", "remote_max": "4M",
     "download_mode": "all",   # all = LAN liber + extern limitat la bitrate; lan = doar LAN; off = dezactivat
     # securitate
@@ -269,7 +296,7 @@ CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, kind TEXT, key TEXT UNI
   runtime INTEGER, cert TEXT, cast_json TEXT DEFAULT '[]', director TEXT, trailer TEXT, added REAL, matched INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS media(id INTEGER PRIMARY KEY, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, path TEXT UNIQUE,
   season INTEGER, episode INTEGER, ep_title TEXT, ep_overview TEXT, still TEXT, air_date TEXT, duration REAL, size INTEGER,
-  probe TEXT, added REAL, subs_checked REAL DEFAULT 0, credits_start REAL DEFAULT NULL);
+  probe TEXT, added REAL, subs_checked REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS subtitles(id INTEGER PRIMARY KEY, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE, lang TEXT,
   label TEXT, source TEXT, path TEXT, stream_index INTEGER, UNIQUE(media_id, source, path, stream_index));
 CREATE TABLE IF NOT EXISTS progress(user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
@@ -311,8 +338,7 @@ def init_db():
                            ("users", "email", "TEXT DEFAULT ''"), ("users", "email_ok", "INTEGER DEFAULT 1"),
                            ("users", "active", "INTEGER DEFAULT 1"), ("users", "totp", "TEXT DEFAULT ''"),
                            ("users", "totp_codes", "TEXT DEFAULT ''"), ("users", "signup_ip", "TEXT DEFAULT ''"), ("sessions", "ip", "TEXT"), ("sessions", "ua", "TEXT"),
-                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT"),
-                           ("media", "credits_start", "REAL DEFAULT NULL")]:
+                           ("sessions", "last_seen", "REAL"), ("sessions", "mkey", "TEXT")]:
         if col not in [r[1] for r in c.execute(f"PRAGMA table_info({tbl})")]:
             c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {decl}")
     c.commit()
@@ -692,7 +718,14 @@ def lan_nets():
 
 
 def client_ip(req: Request):
-    return req.client.host if req.client else "127.0.0.1"
+    # Daca requestul vine de la localhost (nginx reverse proxy), folosim X-Real-IP
+    # Asta permite detectia corecta LAN/remote pentru useri care acceseaza prin domeniu
+    raw = req.client.host if req.client else "127.0.0.1"
+    if raw in ("127.0.0.1", "::1"):
+        hdr = req.headers.get("x-real-ip") or req.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if hdr:
+            return hdr
+    return raw
 
 
 _srv_nets = {"t": 0, "nets": []}
@@ -756,6 +789,22 @@ def server_nets():
     return nets
 
 
+_pub_ip_cache = {"t": 0, "ip": None}
+
+def _server_public_ip():
+    """Returneaza IP-ul public al serverului (cu cache 5 min) pentru detectia NAT hairpin."""
+    if time.time() - _pub_ip_cache["t"] < 300:
+        return _pub_ip_cache["ip"]
+    import urllib.request
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=3) as r:
+            ip = r.read().decode().strip()
+            _pub_ip_cache.update(t=time.time(), ip=ip)
+            return ip
+    except Exception:
+        _pub_ip_cache["t"] = time.time()
+        return None
+
 def is_remote(req: Request):
     try:
         ip = ipaddress.ip_address(client_ip(req))
@@ -764,7 +813,17 @@ def is_remote(req: Request):
     if ip.version == 6 and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
     nets = lan_nets() + (server_nets() if S("lan_auto") == "1" else [])
-    return not any(ip.version == n.version and ip in n for n in nets)
+    if any(ip.version == n.version and ip in n for n in nets):
+        return False
+    # NAT hairpin: clientul apare cu IP-ul public al serverului
+    pub = _server_public_ip()
+    if pub:
+        try:
+            if ip == ipaddress.ip_address(pub):
+                return False
+        except ValueError:
+            pass
+    return True
 
 
 def remote_max_bps():
@@ -914,45 +973,6 @@ def ffprobe(path):
             info["subs"].append({"index": s["index"], "codec": s.get("codec_name"), "lang": lang, "title": tags.get("title", ""),
                                  "forced": bool((s.get("disposition") or {}).get("forced"))})
     return info
-
-
-def detect_credits(path, duration):
-    """Detecteaza inceputul creditelor finale folosind ffprobe blackdetect.
-    Cauta primul black frame din ultimele 5 minute ale fisierului.
-    Returneaza timestamp-ul (float secunde) sau None daca nu gaseste."""
-    if not duration or duration < 120:
-        return None
-    try:
-        # analizam doar ultimele 5 minute (sau tot filmul daca e mai scurt)
-        search_window = min(300, duration * 0.25)
-        start_offset = max(0, duration - search_window)
-        result = subprocess.run([
-            "ffprobe", "-v", "quiet",
-            "-ss", str(start_offset),
-            "-i", path,
-            "-vf", "blackdetect=d=0.5:pix_th=0.10",
-            "-an", "-f", "null", "-"
-        ], capture_output=True, timeout=120, text=True)
-        output = result.stderr
-        # parseaza liniile: [blackdetect @ ...] black_start:123.4 black_end:124.1 black_duration:0.7
-        blacks = []
-        for line in output.splitlines():
-            m = re.search(r"black_start:([\d.]+).*black_end:([\d.]+)", line)
-            if m:
-                bs = float(m.group(1)) + start_offset
-                be = float(m.group(2)) + start_offset
-                blacks.append((bs, be))
-        if not blacks:
-            return None
-        # primul black frame semnificativ (durata > 0.3s) din fereastra de cautare
-        for bs, be in blacks:
-            if (be - bs) >= 0.3 and bs > duration * 0.5:
-                log.info("credits_start detectat la %.1fs (durata totala %.1fs) pentru %s", bs, duration, path)
-                return round(bs, 1)
-        return None
-    except Exception as e:
-        log.warning("detect_credits %s: %s", path, e)
-        return None
 
 
 def os_hash(path):
@@ -1377,6 +1397,7 @@ def scan_library():
     try:
         scan_state.update(running=True, phase="Caut fișiere", done=0, total=0, error="")
         found = {}
+        known = {r["path"] for r in q("SELECT path FROM media")}
         for root in media_dirs():
             if not os.path.isdir(root):
                 log.warning("Folder inexistent/inaccesibil: %s", root)
@@ -1386,7 +1407,15 @@ def scan_library():
                 dn[:] = [d for d in dn if not d.startswith(".") and d.lower() not in ("sample", "samples", "extras", "featurettes", "@eadir")]
                 for f in fn:
                     if Path(f).suffix.lower() in VIDEO_EXT and "sample" not in f.lower() and not f.startswith("."):
-                        found[os.path.join(dp, f)] = root
+                        fp = os.path.join(dp, f)
+                        try:
+                            if time.time() - os.path.getmtime(fp) < 120:   # inca se scrie (download in curs) -> il prindem la scanarea urmatoare
+                                if fp in known:
+                                    found[fp] = root
+                                continue
+                        except OSError:
+                            continue
+                        found[fp] = root
         existing = {r["path"]: r["id"] for r in q("SELECT id,path FROM media")}
         roots_ok = [r for r in media_dirs() if os.path.isdir(r)]
         for p, mid in existing.items():
@@ -1400,16 +1429,11 @@ def scan_library():
                 g = guess(p, found[p])
                 info = ffprobe(p)
                 item_id = get_item_for(g)
-                dur = (info or {}).get("duration") or 0
                 mid = x("INSERT INTO media(item_id,path,season,episode,duration,size,probe,added) VALUES(?,?,?,?,?,?,?,?)",
-                        (item_id, p, g.get("season"), g.get("episode"), dur, os.path.getsize(p),
+                        (item_id, p, g.get("season"), g.get("episode"), (info or {}).get("duration") or 0, os.path.getsize(p),
                          json.dumps(info), time.time()))
                 find_local_subs(mid, p)
                 add_embedded_subs(mid, info)
-                # detectie credite in background (nu blocheaza scanarea)
-                if g.get("season") is not None and dur > 120:
-                    _mid, _p, _dur = mid, p, dur
-                    threading.Thread(target=lambda m=_mid,f=_p,d=_dur: x("UPDATE media SET credits_start=? WHERE id=?", (detect_credits(f,d) or max(0,d-30), m)), daemon=True).start()
                 x("UPDATE items SET added=? WHERE id=?", (time.time(), item_id))
             except Exception as e:
                 log.exception("scan %s: %s", p, e)
@@ -1444,6 +1468,32 @@ def scan_library():
 
 def scan_async():
     threading.Thread(target=scan_library, daemon=True).start()
+
+
+def prune_missing():
+    """Scoate rapid din biblioteca fisierele sterse de pe disc (fara scanare completa)."""
+    roots_ok = [r for r in media_dirs() if os.path.isdir(r)]
+    if not roots_ok:
+        return 0
+    gone = [r["id"] for r in q("SELECT id,path FROM media")
+            if any(r["path"].startswith(rt) for rt in roots_ok) and not os.path.exists(r["path"])]
+    for mid in gone:
+        x("DELETE FROM media WHERE id=?", (mid,))
+    if gone:
+        x("DELETE FROM items WHERE id NOT IN (SELECT DISTINCT item_id FROM media WHERE item_id IS NOT NULL)")
+        log.info("prune: %d fisiere disparute scoase din biblioteca", len(gone))
+    return len(gone)
+
+
+def periodic_prune():
+    while True:
+        time.sleep(30)
+        if scan_lock.locked():
+            continue
+        try:
+            prune_missing()
+        except Exception as e:
+            log.warning("prune: %s", e)
 
 
 # ---------------------------------------------------------------- OpenSubtitles
@@ -2074,6 +2124,13 @@ from contextlib import asynccontextmanager
 async def lifespan(_app):
     _startup()
     yield
+    # shutdown: opreste toate sesiunile live ca sa elibereze tunere TVheadend
+    for ls in list(LIVE.values()):
+        try:
+            ls.stop()
+        except Exception:
+            pass
+    LIVE.clear()
 
 
 def _startup():
@@ -2090,7 +2147,7 @@ def _startup():
     threading.Thread(target=live_refresher, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=periodic_scan, daemon=True).start()
-    threading.Thread(target=credits_backfill, daemon=True).start()
+    threading.Thread(target=periodic_prune, daemon=True).start()
 
 
 app = FastAPI(title="CineVerse by NetStreaming", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -2921,73 +2978,16 @@ async def mark_watched(media_id: int, req: Request):
     return {"ok": True}
 
 
-THUMB_DIR = DATA / "thumbs"
-THUMB_DIR.mkdir(exist_ok=True)
-
-@app.get("/api/media/{media_id}/thumb")
-def media_thumb(media_id: int, t: float, req: Request):
-    """Returneaza un frame JPEG la timestamp t (secunde) din fisierul media."""
-    u = need_user(req)
-    m = need_media(u, q("SELECT path, duration FROM media WHERE id=?", (media_id,), one=True))
-    if not m:
-        raise HTTPException(404)
-    # cache: un fisier per (media_id, t rotunjit la 5s)
-    ts = round(t / 5) * 5
-    cache_path = THUMB_DIR / f"{media_id}_{ts}.jpg"
-    if not cache_path.exists():
-        try:
-            subprocess.run([
-                "ffmpeg", "-y", "-ss", str(ts), "-i", m["path"],
-                "-vframes", "1", "-vf", "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
-                "-q:v", "5", str(cache_path)
-            ], capture_output=True, timeout=10)
-        except Exception as e:
-            log.warning("thumb %s@%s: %s", media_id, ts, e)
-            raise HTTPException(500)
-    if not cache_path.exists():
-        raise HTTPException(404)
-    return FileResponse(str(cache_path), media_type="image/jpeg",
-                        headers={"Cache-Control": "max-age=3600"})
-
-
 @app.get("/api/media/{media_id}/next")
 def next_media(media_id: int, req: Request):
     u = need_user(req)
     m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
     if not m or m["season"] is None:
-        return {"next": None, "credits_start": None}
+        return {"next": None}
     n = q("SELECT * FROM media WHERE item_id=? AND (season>? OR (season=? AND episode>?)) ORDER BY season, episode LIMIT 1",
           (m["item_id"], m["season"], m["season"], m["episode"]), one=True)
-    # returneaza si credits_start pentru episodul curent
-    cs = m["credits_start"] if "credits_start" in m.keys() else None
     return {"next": {"id": n["id"], "season": n["season"], "episode": n["episode"], "title": n["ep_title"] or f"Episodul {n['episode']}",
-                     "still": n["still"]} if n else None,
-            "credits_start": cs}
-
-
-@app.post("/api/media/{media_id}/detect-credits")
-def detect_credits_api(media_id: int, req: Request):
-    """Detecteaza inceputul creditelor finale si salveaza in DB. Ruleaza in background."""
-    u = need_user(req)
-    m = need_media(u, q("SELECT * FROM media WHERE id=?", (media_id,), one=True))
-    if not m:
-        raise HTTPException(404)
-    # daca deja avem rezultat, returnez direct
-    cs = m["credits_start"] if "credits_start" in m.keys() else None
-    if cs is not None:
-        return {"credits_start": cs, "cached": True}
-    # ruleaza detectia in background thread
-    def _run():
-        dur = m["duration"] or 0
-        result = detect_credits(m["path"], dur)
-        if result is None and dur > 120:
-            # fallback: ultimele 30 secunde
-            result = max(0, dur - 30)
-            log.info("credits_start fallback la %.1fs pentru media_id=%d", result, media_id)
-        if result is not None:
-            x("UPDATE media SET credits_start=? WHERE id=?", (result, media_id))
-    threading.Thread(target=_run, daemon=True).start()
-    return {"credits_start": None, "detecting": True}
+                     "still": n["still"]} if n else None}
 
 
 _EP_CACHE = {}
@@ -3046,13 +3046,33 @@ def media_details(media_id: int, req: Request):
     return d
 
 
+@app.get("/api/media/{media_id}/thumb")
+def media_thumb(media_id: int, t: float = 0, req: Request = None):
+    """Thumbnail preview pentru seek bar — extrage un frame la secunda t cu ffmpeg."""
+    u = need_user(req)
+    m = need_media(u, q("SELECT path FROM media WHERE id=?", (media_id,), one=True))
+    if not m or not os.path.exists(m["path"]):
+        raise HTTPException(404)
+    try:
+        cmd = ["ffmpeg", "-ss", str(max(0, t)), "-i", m["path"],
+               "-vframes", "1", "-vf", "scale=170:-1",
+               "-f", "image2", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1"]
+        result = subprocess.run(cmd, capture_output=True, timeout=5)
+        if result.returncode != 0 or not result.stdout:
+            raise HTTPException(404)
+        return Response(content=result.stdout, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600"})
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504)
+
+
 @app.get("/api/media/{media_id}/info")
 def media_info(media_id: int, req: Request):
     u = need_user(req)
     m = need_media(u, q("SELECT m.*, i.title as it_title, i.kind, i.logo FROM media m JOIN items i ON i.id=m.item_id WHERE m.id=?", (media_id,), one=True))
     if not m:
         raise HTTPException(404)
-    sub = f"S{m['season']}:E{m['episode']} „{m['ep_title'] or ''}”" if m["kind"] == "series" else ""
+    sub = (f"S{m['season']}:E{m['episode']} {m['ep_title'] or ''}" if m["kind"] == "series" else "")
     return {"id": m["id"], "item_id": m["item_id"], "title": m["it_title"], "subtitle": sub, "kind": m["kind"]}
 
 
@@ -3231,6 +3251,18 @@ def local_ip_for(host):
     try:
         s_.connect((host, 8009))
         return s_.getsockname()[0]
+    finally:
+        s_.close()
+
+
+def _local_server_ip():
+    """Returneaza IP-ul local al serverului (folosit pentru URL-urile CAF sender)."""
+    s_ = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s_.connect(("8.8.8.8", 80))
+        return s_.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
     finally:
         s_.close()
 
@@ -3448,6 +3480,14 @@ def cast_start(uid, dev_id, media_id, start, audio, sub_id):
     thumb = f"{base}/image.jpg" if img else None
     if thumb:
         md["images"] = [{"url": thumb}]
+    # Lansam receiver-ul custom CineVerse (App ID 08BDAD23) daca nu e deja activ
+    CINEVERSE_APP_ID = "08BDAD23"
+    try:
+        if cc.app_id != CINEVERSE_APP_ID:
+            cc.start_app(CINEVERSE_APP_ID)
+            __import__("time").sleep(3)
+    except Exception as _e:
+        log.warning("Nu am putut lansa receiver-ul custom CineVerse: %s", _e)
     mc = cc.media_controller
     kw = dict(title=title, thumb=thumb, current_time=max(0.0, float(start)), stream_type="BUFFERED", metadata=md,
               media_info={"hlsSegmentFormat": "ts", "hlsVideoSegmentFormat": "mpeg2_ts"})
@@ -3618,7 +3658,6 @@ LIVE = {}            # (channel_id, variant) -> LiveSession
 LIVE_LOCK = threading.RLock()
 LIVE_TOKENS = {}     # token Chromecast -> (channel_id, variant)
 EPG_STATE = {"running": False, "last": 0, "count": 0, "err": ""}
-CH_CHECK_STATE = {"running": False, "last": 0, "done": 0, "total": 0, "disabled": 0, "err": ""}
 
 
 def live_probe(url, ua=""):
@@ -3632,15 +3671,17 @@ def live_probe(url, ua=""):
         return {"ok": False, "error": str(e)}
     v = next((x_ for x_ in d.get("streams", []) if x_.get("codec_type") == "video" and not (x_.get("disposition") or {}).get("attached_pic")), None)
     a = next((x_ for x_ in d.get("streams", []) if x_.get("codec_type") == "audio"), None)
+    subs = [x_.get("codec_name") for x_ in d.get("streams", []) if x_.get("codec_type") == "subtitle"]
     if not v and not a:
         return {"ok": False, "error": "Nu am putut citi stream-ul (verifică URL-ul)"}
     return {"ok": True, "vcodec": (v or {}).get("codec_name"), "width": (v or {}).get("width"), "height": (v or {}).get("height"),
-            "pix_fmt": (v or {}).get("pix_fmt"), "acodec": (a or {}).get("codec_name"), "channels": (a or {}).get("channels"), "t": time.time()}
+            "pix_fmt": (v or {}).get("pix_fmt"), "acodec": (a or {}).get("codec_name"), "channels": (a or {}).get("channels"),
+            "subs": subs, "t": time.time()}
 
 
 def ch_probe(ch):
     pr = json.loads(ch["probe"] or "{}") if ch["probe"] else {}
-    if not pr.get("ok") or time.time() - pr.get("t", 0) > 86400:
+    if not pr.get("ok") or "subs" not in pr or time.time() - pr.get("t", 0) > 86400:
         pr = live_probe(ch["url"], ch["ua"])
         if pr.get("ok"):
             x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps(pr), ch["id"]))
@@ -3655,6 +3696,12 @@ class LiveSession:
         self.proc, self.last, self.method, self.err, self.restarts = None, time.time(), "", "", 0
         self.lock = threading.Lock()
         self.probe = {}
+        self.burn = False
+
+    def burn_wanted(self):
+        """Subtitrare bitmap (DVB/DVD/PGS) de ars in imagine – doar pentru varianta video transcodata."""
+        return S("live_burn_subs") == "1" and bool(self.probe.get("vcodec")) and \
+            any(c in BITMAP_LIVE_SUBS for c in (self.probe.get("subs") or []))
 
     def build(self, hw):
         ch, pr = self.ch, self.probe
@@ -3668,6 +3715,8 @@ class LiveSession:
         copy = pr.get("vcodec") and ch["mode"] != "transcode" and not ql and vc == "h264" and (pr.get("pix_fmt") or "yuv420p") in ("yuv420p", "yuvj420p")
         if ch["mode"] == "copy" and not ql:
             copy = True
+        if self.burn:
+            copy = False   # subtitrarea arsa cere transcodare
         h0 = pr.get("height") or 720
         maxh = min(int(S("max_height") or 1080), ql[2] if ql else 10000)
         h = min(h0, maxh)
@@ -3675,33 +3724,41 @@ class LiveSession:
         vb = (max(150, int(ql[1] / 1000 * 0.95) - ql[3]) if ql else int(float((S("bitrate") or "8M").rstrip("M")) * 1000))
         if not copy and hw == "vaapi":
             cmd += ["-init_hw_device", f"vaapi=va:{S('vaapi_device')}", "-filter_hw_device", "va"]
-        cmd += ["-fflags", "+genpts+discardcorrupt", "-i", url, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn"]
+        cmd += ["-fflags", "+genpts+discardcorrupt", "-i", url]
         if not pr.get("vcodec"):
-            cmd += ["-vn"]
+            cmd += ["-map", "0:a:0?", "-sn", "-dn", "-vn"]
         elif copy:
-            cmd += ["-c:v", "copy"]
+            cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy", "-c:a", "aac", "-ac", "2", "-b:a", "128k", "-ar", "48000"]
             self.method = "Remux (video copiat)"
         else:
-            vf = f"yadif=deint=interlaced,scale=-2:{h},format=yuv420p"
-            if hw == "vaapi":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12,hwupload", "-c:v", "h264_vaapi", "-b:v", f"{vb}k",
-                        "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "nvenc":
-                cmd += ["-vf", vf, "-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "qsv":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12,hwupload=extra_hw_frames=64", "-c:v", "h264_qsv",
-                        "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
-            elif hw == "amf":
-                cmd += ["-vf", f"yadif=deint=interlaced,scale=-2:{h},format=nv12", "-c:v", "h264_amf", "-usage", "transcoding",
-                        "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            # filtrele de dupa deinterlace, specifice fiecarui encoder
+            tail = {"vaapi": f"scale=-2:{h},format=nv12,hwupload",
+                    "qsv": f"scale=-2:{h},format=nv12,hwupload=extra_hw_frames=64",
+                    "amf": f"scale=-2:{h},format=nv12"}.get(hw, f"scale=-2:{h},format=yuv420p")
+            if self.burn:
+                # subtitrarea bitmap e adusa la dimensiunea imaginii si suprapusa inainte de scalare/upload pe GPU
+                fc = ("[0:v:0]yadif=deint=interlaced[d];[0:s:0][d]scale2ref[s][d2];"
+                      f"[d2][s]overlay=eof_action=pass[o];[o]{tail}[v]")
+                cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?", "-dn"]
             else:
-                cmd += ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-b:v", f"{vb}k", "-maxrate", f"{vb}k",
+                cmd += ["-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-vf", f"yadif=deint=interlaced,{tail}"]
+            if hw == "vaapi":
+                cmd += ["-c:v", "h264_vaapi", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "nvenc":
+                cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "qsv":
+                cmd += ["-c:v", "h264_qsv", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            elif hw == "amf":
+                cmd += ["-c:v", "h264_amf", "-usage", "transcoding", "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k"]
+            else:
+                cmd += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-b:v", f"{vb}k", "-maxrate", f"{vb}k",
                         "-bufsize", f"{vb * 2}k", "-sc_threshold", "0"]
             cmd += ["-g", "50", "-force_key_frames", "expr:gte(t,n_forced*2)"]
-            self.method = f"Transcodare – {'GPU (' + hw.upper() + ')' if hw in ('vaapi', 'nvenc', 'qsv', 'amf') else 'CPU'}"
+            self.method = (f"Transcodare – {'GPU (' + hw.upper() + ')' if hw in ('vaapi', 'nvenc', 'qsv', 'amf') else 'CPU'}"
+                           + (" + subtitrare" if self.burn else ""))
         cmd += ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-ar", "48000",
-                "-f", "hls", "-hls_time", "4", "-hls_list_size", "8", "-hls_delete_threshold", "4",
-                "-hls_flags", "delete_segments+independent_segments+temp_file+omit_endlist",
+                "-f", "hls", "-hls_time", "4", "-hls_list_size", "20", "-hls_delete_threshold", "10",
+                "-hls_flags", "delete_segments+independent_segments+omit_endlist",
                 "-hls_segment_filename", str(self.dir / "s%06d.ts"), str(self.dir / "index.m3u8")]
         return cmd
 
@@ -3722,36 +3779,41 @@ class LiveSession:
             if not self.probe.get("ok"):
                 self.err = self.probe.get("error", "Sursa nu răspunde")
                 return False
-            plans = ([HW["mode"]] if HW["mode"] in ("vaapi", "nvenc", "qsv", "amf") else []) + ["none"]
-            for hw in plans:
+            hws = ([HW["mode"]] if HW["mode"] in ("vaapi", "nvenc", "qsv", "amf") else []) + ["none"]
+            # cu subtitrare arsa intai; daca nu merge pe nicio varianta, fara subtitrare
+            plans = ([(hw, True) for hw in hws] if self.burn_wanted() else []) + [(hw, False) for hw in hws]
+            copy_done = 0
+            for hw, burn in plans:
+                self.burn = burn
+                shutil.rmtree(self.dir, ignore_errors=True)
+                self.dir.mkdir(parents=True, exist_ok=True)
                 self.proc = subprocess.Popen(self.build(hw), stdout=subprocess.DEVNULL, stderr=open(self.dir.parent / f"{self.dir.name}.log", "wb"),
-                                             **popen_kw())
+                                             cwd=str(TRANS), **popen_kw())
                 t0 = time.time()
                 while time.time() - t0 < 30:
                     if self.ready():
                         log.info("TV Live: %s (%s) pornit – %s", self.ch["name"], self.variant, self.method)
                         self.err = ""
                         return True
-                    if self.proc.poll() is not None:
+                    if self.proc is None or self.proc.poll() is not None:
                         break
                     time.sleep(0.2)
                 self.err = (self.dir.parent / f"{self.dir.name}.log").read_text(errors="ignore")[-300:] or "Sursa nu a trimis date"
                 self.stop(keep=True)
                 if "copy" in self.method.lower():
-                    break
+                    copy_done += 1
+                    if copy_done >= 2:  # max 2 copy attempts (first packet often corrupt)
+                        break
             log.warning("TV Live: %s nu a pornit: %s", self.ch["name"], self.err)
             return False
 
     def stop(self, keep=False):
         if self.proc and self.proc.poll() is None:
             try:
-                self.proc.terminate()
-                self.proc.wait(4)
+                self.proc.kill()   # SIGKILL direct, nu SIGTERM - ffmpeg ignora SIGTERM
+                self.proc.wait(2)
             except Exception:
-                try:
-                    self.proc.kill()
-                except Exception:
-                    pass
+                pass
         self.proc = None
         if not keep:
             shutil.rmtree(self.dir, ignore_errors=True)
@@ -3766,23 +3828,49 @@ def live_session(ch, variant):
             LIVE[key] = ls
     ls.last = time.time()
     if not ls.alive() and not ls.start():
-        raise HTTPException(502, f"Canalul „{ch['name']}” nu poate fi pornit: {ls.err[:160]}")
+        # opreste imediat si scoate din LIVE ca sa nu blocheze tunerul
+        ls.stop()
+        with LIVE_LOCK:
+            LIVE.pop(key, None)
+        # daca sursa a dat End of file, TVheadend poate fi ocupat – asteptam si reincercam o data
+        if "End of file" in ls.err or "end of file" in ls.err.lower():
+            time.sleep(3)
+            ls2 = LiveSession(ch, variant)
+            with LIVE_LOCK:
+                LIVE[key] = ls2
+            ls2.last = time.time()
+            if not ls2.start():
+                ls2.stop()
+                with LIVE_LOCK:
+                    LIVE.pop(key, None)
+                raise HTTPException(502, f"Canalul {ch['name']} nu poate fi pornit: {ls2.err[:160]}")
+            return ls2
+        raise HTTPException(502, f"Canalul {ch['name']} nu poate fi pornit: {ls.err[:160]}")
     return ls
 
 
 def live_janitor():
     while True:
-        time.sleep(4)
+        time.sleep(2)
         now = time.time()
         used = set(LIVE_TOKENS.values())
         for key, ls in list(LIVE.items()):
             idle = now - ls.last
-            if idle > 45 and key not in used:
+            if idle > max(5, int(S("live_idle") or 10)) and key not in used:
+                log.info("TV Live: janitor opreste %s/%s (idle %.0fs)", key[0], key[1], idle)
                 ls.stop()
                 LIVE.pop(key, None)
-            elif not ls.alive() and idle < 20 and ls.restarts < 30:   # sursa a cazut, dar cineva se uita -> repornim
-                ls.restarts += 1
-                threading.Thread(target=ls.start, daemon=True).start()
+            elif not ls.alive() and idle < 20 and ls.restarts < 5:   # sursa a cazut, dar cineva se uita -> repornim
+                # reporneste doar daca exista un user activ pe acest canal
+                cid = key[0]
+                with ALOCK:
+                    has_viewer = any(e.get("live_ch") == cid for e in ACTIVE.values())
+                if has_viewer:
+                    ls.restarts += 1
+                    threading.Thread(target=ls.start, daemon=True).start()
+                else:
+                    ls.stop()
+                    LIVE.pop(key, None)
 
 
 def epg_now(tvg_ids):
@@ -3891,6 +3979,32 @@ async def live_play(req: Request):
             "qualities": ([] if remote else [{"key": "orig", "label": "Original"}]) + [{"key": x_[0], "label": x_[4]} for x_ in allowed]}
 
 
+@app.delete("/api/live/play")
+@app.post("/api/live/stop_beacon")
+async def live_stop(req: Request):
+    u = need_live_user(req)
+    try:
+        d = await req.json()
+    except Exception:
+        d = {}
+    cid = int(d.get("channel", 0))
+    variant = d.get("quality", "orig")
+    key = (cid, variant)
+    ls = LIVE.get(key)
+    if ls:
+        # verifica daca alt user se mai uita la acelasi canal
+        with ALOCK:
+            other_viewers = sum(1 for uid, e in ACTIVE.items() if uid != u["id"] and e.get("live_ch") == cid)
+        if other_viewers == 0:
+            log.info("TV Live: stop %s/%s (beacon/delete)", cid, variant)
+            ls.stop()
+            LIVE.pop(key, None)
+        else:
+            ls.last = time.time()  # altcineva se uita, nu opri
+    with ALOCK:
+        ACTIVE.pop((u["id"], d.get("client", "web")), None)
+    return {"ok": True}
+
 @app.get("/api/live/s/{cid}/{variant}/{name}")
 def live_file(cid: int, variant: str, name: str, req: Request):
     u = need_live_user(req)
@@ -3912,9 +4026,21 @@ def _live_serve(cid, variant, name, headers):
     ls.last = time.time()
     p = ls.dir / name
     if name.endswith(".m3u8"):
+        # asteapta pana la 5s ca index.m3u8 sa apara si sa aiba cel putin 2 segmente
+        for _ in range(25):
+            if ls.ready():
+                break
+            if not ls.alive():
+                break
+            time.sleep(0.2)
         if not p.exists():
             raise HTTPException(404)
         return Response(p.read_text(errors="ignore"), media_type="application/vnd.apple.mpegurl", headers=headers)
+    # asteapta pana la 3s ca segmentul .ts sa apara (ffmpeg poate intarzia la primul segment)
+    for _ in range(15):
+        if p.exists():
+            break
+        time.sleep(0.2)
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(p, media_type="video/mp2t", headers=headers)
@@ -3958,6 +4084,14 @@ def cast_start_live(uid, dev_id, cid):
     LIVE_TOKENS[tok] = (ch["id"], "orig")
     base = f"http://{local_ip_for(cc.cast_info.host)}:{HTTP_PORT}/cast/live/{tok}"
     thumb = f"{base}/logo" if ch["logo"] else None
+    # Lansam receiver-ul custom CineVerse
+    CINEVERSE_APP_ID = "08BDAD23"
+    try:
+        if cc.app_id != CINEVERSE_APP_ID:
+            cc.start_app(CINEVERSE_APP_ID)
+            __import__("time").sleep(3)
+    except Exception as _e:
+        log.warning("Nu am putut lansa receiver-ul custom CineVerse (live): %s", _e)
     cc.media_controller.play_media(f"{base}/index.m3u8", "application/x-mpegURL", title=ch["name"], thumb=thumb, stream_type="LIVE",
                                    metadata={"metadataType": 0, "title": ch["name"], "subtitle": "TV Live", **({"images": [{"url": thumb}]} if thumb else {})},
                                    media_info={"hlsSegmentFormat": "ts", "hlsVideoSegmentFormat": "mpeg2_ts"})
@@ -3982,6 +4116,126 @@ async def cast_live(req: Request):
     d = await req.json()
     a = await asyncio.to_thread(cast_start_live, u["id"], str(d["device"]), int(d["channel"]))
     return {"ok": True, "device": a["device_name"]}
+
+
+# ---- CAF Sender endpoints: browser-ul controleaza direct Chromecast-ul ----
+
+def _caf_stream_start(uid, media_id, start, audio, sub_id):
+    """Porneste transcodarea si returneaza URL-ul HLS (fara sa controleze Chromecast)."""
+    m = q("SELECT m.*, i.title AS it_title, i.kind, i.poster, i.backdrop, i.year FROM media m JOIN items i ON i.id=m.item_id WHERE m.id=?",
+          (media_id,), one=True)
+    if not m or not os.path.exists(m["path"]):
+        raise HTTPException(404, "Fișierul nu există")
+    info = json.loads(m["probe"] or "{}") or ffprobe(m["path"]) or {}
+    auds = info.get("audio", [])
+    if audio is None and auds:
+        audio = (next((a_ for a_ in auds if is_ro(a_["lang"])), None) or next((a_ for a_ in auds if a_["default"]), None) or auds[0])["index"]
+    alang = next((a_["lang"] for a_ in auds if a_["index"] == audio), "")
+    if sub_id == "auto":
+        sub_id = pick_ro_sub(media_id, alang)
+    tok = secrets.token_urlsafe(18)
+    st = CastStream(tok, m, info, audio, uid, sub_id)
+    n0 = int(max(0, start) // SEG)
+    if not st.start_at(n0):
+        st.cleanup()
+        raise HTTPException(500, "Transcodarea pentru Cast a eșuat")
+    CAST_STREAMS[tok] = st
+    # folosim IP-ul local al serverului (nu al Chromecast-ului — browserul se va conecta)
+    local_ip = _local_server_ip()
+    base = f"http://{local_ip}:{HTTP_PORT}/cast/{tok}"
+    sub_url = f"{base}/sub.vtt" if sub_id else None
+    thumb_url = f"{base}/image.jpg" if (m["still"] or m["backdrop"] or m["poster"]) else None
+    if m["kind"] == "series":
+        kind = "series"
+        title = m["ep_title"] or f"Episodul {m['episode']}"
+        series_title = m["it_title"]
+        full = f"{series_title} – S{m['season']}:E{m['episode']} {title}".strip()
+    else:
+        kind = "movie"
+        title = m["it_title"]
+        series_title = None
+        full = title
+    un = (q("SELECT username FROM users WHERE id=?", (uid,), one=True) or {"username": "?"})["username"]
+    lid = x("""INSERT INTO play_log(user_id,username,media_id,title,client,device,ip,remote,method,quality,started,ended,watched,last_pos,duration)
+        VALUES(?,?,?,?,?,?,?,0,?,?,?,?,0,?,?)""", (uid, un, media_id, full, "cast-caf", "Chromecast (CAF)", "rețea locală",
+                                                   st.method, "LAN", time.time(), time.time(), start, st.duration))
+    # salvam in CAST_ACTIVE pentru compatibilitate cu /api/cast/status si progress
+    CAST_ACTIVE[uid] = {"log_id": lid, "last_tick": time.time(), "caf": True,
+                        "device": "caf", "device_name": "Chromecast (CAF)", "token": tok, "media_id": media_id,
+                        "item_id": m["item_id"], "audio": audio, "sub_id": sub_id,
+                        "duration": st.duration, "title": full, "img": m["still"] or m["backdrop"] or m["poster"],
+                        "started": time.time(), "pos": start}
+    return {"url": f"{base}/index.m3u8", "token": tok, "title": title, "kind": kind,
+            "series_title": series_title, "season": m.get("season"), "episode": m.get("episode"),
+            "thumb": thumb_url, "year": m.get("year"), "sub_url": sub_url,
+            "start_time": float(start), "duration": st.duration, "item_id": m["item_id"]}
+
+
+@app.post("/api/cast/stream")
+async def caf_stream(req: Request):
+    """CAF Sender: porneste transcodarea si returneaza URL HLS pentru browser → Chromecast direct."""
+    u = need_lan_user(req)
+    d = await req.json()
+    need_media(u, q("SELECT path FROM media WHERE id=?", (int(d["media_id"]),), one=True))
+    return await asyncio.to_thread(_caf_stream_start, u["id"], int(d["media_id"]),
+                                   float(d.get("start") or 0), d.get("audio"), d.get("sub", "auto"))
+
+
+@app.post("/api/cast/stream/live")
+async def caf_stream_live(req: Request):
+    """CAF Sender: returneaza URL HLS live pentru browser → Chromecast direct."""
+    u = need_lan_user(req)
+    if not u["live_ok"]:
+        raise HTTPException(403, "Contul tău nu are acces la TV Live")
+    d = await req.json()
+    cid = int(d["channel"])
+    ch = q("SELECT * FROM live_channels WHERE id=? AND enabled=1", (cid,), one=True)
+    if not ch:
+        raise HTTPException(404, "Canal inexistent")
+    ls = live_session(ch, "orig")
+    tok = secrets.token_urlsafe(18)
+    LIVE_TOKENS[tok] = (ch["id"], "orig")
+    local_ip = _local_server_ip()
+    base = f"http://{local_ip}:{HTTP_PORT}/cast/live/{tok}"
+    thumb_url = f"{base}/logo" if ch["logo"] else None
+    un = (q("SELECT username FROM users WHERE id=?", (u["id"],), one=True) or {"username": "?"})["username"]
+    lid = x("""INSERT INTO play_log(user_id,username,media_id,title,client,device,ip,remote,method,quality,started,ended,watched,last_pos,duration)
+        VALUES(?,?,NULL,?,?,?,?,0,?,?,?,?,0,0,0)""", (u["id"], un, f"📺 {ch['name']}", "cast-caf",
+                                                       "Chromecast (CAF)", "rețea locală", ls.method, "LAN",
+                                                       time.time(), time.time()))
+    CAST_ACTIVE[u["id"]] = {"live": True, "caf": True, "channel": ch["id"], "device": "caf",
+                             "device_name": "Chromecast (CAF)", "token": tok,
+                             "title": f"📺 {ch['name']}", "logo": bool(ch["logo"]),
+                             "started": time.time(), "log_id": lid, "last_tick": time.time(),
+                             "media_id": None, "item_id": None, "img": None, "duration": 0}
+    return {"url": f"{base}/index.m3u8", "token": tok, "title": ch["name"], "thumb": thumb_url}
+
+
+@app.post("/api/cast/progress")
+async def caf_progress(req: Request):
+    """CAF Sender: browserul raporteaza pozitia curenta (pentru resume si log)."""
+    u = need_user(req)
+    d = await req.json()
+    tok = d.get("token", "")
+    pos = float(d.get("pos") or 0)
+    done = bool(d.get("done"))
+    a = CAST_ACTIVE.get(u["id"])
+    if a and a.get("token") == tok:
+        a["last_tick"] = time.time()
+        a["pos"] = pos
+        if a.get("log_id"):
+            x("UPDATE play_log SET ended=?, last_pos=?, watched=MIN(duration, watched+5) WHERE id=?",
+              (time.time(), pos, a["log_id"]))
+        if done:
+            dur = a.get("duration", 0)
+            mid = a.get("media_id")
+            if mid and dur and pos > 10:
+                save_progress(u["id"], mid, pos, dur)
+            CAST_ACTIVE.pop(u["id"], None)
+            st = CAST_STREAMS.pop(tok, None)
+            if st:
+                st.cleanup()
+    return {"ok": True}
 
 
 @app.options("/cast/live/{token}/{name}")
@@ -4158,59 +4412,6 @@ def refresh_epg():
         EPG_STATE["running"] = False
 
 
-def run_channel_check(only_enabled=True):
-    """Testează toate canalele cu ffprobe și dezactivează cele care nu răspund."""
-    if CH_CHECK_STATE["running"]:
-        return
-    CH_CHECK_STATE.update(running=True, err="", done=0, disabled=0)
-    try:
-        filt = "WHERE enabled=1" if only_enabled else ""
-        chs = q(f"SELECT * FROM live_channels {filt} ORDER BY COALESCE(num,99999)")
-        CH_CHECK_STATE["total"] = len(chs)
-        disabled = 0
-        for ch in chs:
-            try:
-                pr = live_probe(ch["url"], ch["ua"] or "")
-                x("UPDATE live_channels SET probe=? WHERE id=?", (json.dumps({**pr, "t": time.time()}), ch["id"]))
-                if not pr.get("ok"):
-                    x("UPDATE live_channels SET enabled=0 WHERE id=?", (ch["id"],))
-                    # opreste sesiunea live daca e pornita
-                    for k in list(LIVE.keys()):
-                        if k[0] == ch["id"]:
-                            try: LIVE[k].stop()
-                            except: pass
-                    disabled += 1
-            except Exception as e:
-                log.warning("ch_check canal %s: %s", ch["name"], e)
-            CH_CHECK_STATE["done"] += 1
-            CH_CHECK_STATE["disabled"] = disabled
-        CH_CHECK_STATE["last"] = time.time()
-        log.info("Verificare canale: %d testate, %d dezactivate", len(chs), disabled)
-    except Exception as e:
-        CH_CHECK_STATE["err"] = str(e)[:200]
-        log.warning("run_channel_check: %s", e)
-    finally:
-        CH_CHECK_STATE["running"] = False
-
-
-def credits_backfill():
-    """La pornire, detecteaza credits_start pentru episoadele care nu au inca valoarea."""
-    time.sleep(30)  # asteapta serverul sa porneasca complet
-    rows = q("SELECT id, path, duration FROM media WHERE season IS NOT NULL AND credits_start IS NULL AND duration > 120")
-    if not rows:
-        return
-    log.info("credits_backfill: %d episoade fara credits_start detectat", len(rows))
-    for r in rows:
-        try:
-            cs = detect_credits(r["path"], r["duration"])
-            if cs is None:
-                cs = max(0, r["duration"] - 30)
-            x("UPDATE media SET credits_start=? WHERE id=?", (cs, r["id"]))
-        except Exception as e:
-            log.warning("credits_backfill %s: %s", r["path"], e)
-    log.info("credits_backfill: finalizat")
-
-
 def live_refresher():
     time.sleep(20)
     while True:
@@ -4221,10 +4422,6 @@ def live_refresher():
                     refresh_playlist(pl["id"])
             if S("epg_urls") and time.time() - EPG_STATE["last"] > 6 * 3600:
                 refresh_epg()
-            # verificare automata canale – o data pe zi, noaptea
-            check_iv = 86400  # 24h
-            if time.time() - CH_CHECK_STATE["last"] > check_iv and not CH_CHECK_STATE["running"]:
-                threading.Thread(target=run_channel_check, daemon=True).start()
         except Exception as e:
             log.warning("live refresher: %s", e)
         time.sleep(600)
@@ -4307,29 +4504,6 @@ async def admin_live_playlist(req: Request):
     return {"ok": True, "count": r["count"]}
 
 
-@app.post("/api/admin/live/playlist/upload")
-async def admin_live_playlist_upload(req: Request):
-    """Primește fișier .m3u ca flux brut și îl importă ca playlist nou."""
-    need_admin(req)
-    name = req.headers.get("X-Playlist-Name", "Fișier M3U")[:60]
-    total = 0
-    chunks = []
-    async for chunk in req.stream():
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > 50 * 1024 * 1024:
-            raise HTTPException(413, "Fișier prea mare (max 50 MB)")
-    if not total:
-        raise HTTPException(400, "Fișier gol")
-    text = b"".join(chunks).decode("utf-8", errors="replace")
-    if "#EXTM3U" not in text and "#EXTINF" not in text:
-        raise HTTPException(400, "Nu pare un fișier M3U valid")
-    pid = x("INSERT INTO live_playlists(url,name,last,count) VALUES('',?,?,0)", (name, time.time()))
-    n = import_m3u(pid, text)
-    x("UPDATE live_playlists SET count=? WHERE id=?", (n, pid))
-    return {"ok": True, "count": n}
-
-
 @app.post("/api/admin/live/playlist/{pid}/refresh")
 async def admin_live_pl_refresh(pid: int, req: Request):
     need_admin(req)
@@ -4355,25 +4529,6 @@ async def admin_live_epg(req: Request):
         set_S("epg_urls", d["urls"].strip())
     threading.Thread(target=refresh_epg, daemon=True).start()
     return {"ok": True}
-
-
-@app.post("/api/admin/live/check")
-async def admin_live_check(req: Request):
-    """Porneste verificarea manuala a tuturor canalelor."""
-    need_admin(req)
-    if CH_CHECK_STATE["running"]:
-        return {"ok": False, "msg": "Verificare deja în curs"}
-    d = await req.json()
-    only_enabled = d.get("only_enabled", True)
-    threading.Thread(target=run_channel_check, args=(only_enabled,), daemon=True).start()
-    return {"ok": True}
-
-
-@app.get("/api/admin/live/check")
-def admin_live_check_status(req: Request):
-    """Status curent al verificarii."""
-    need_admin(req)
-    return dict(CH_CHECK_STATE)
 
 
 # ---------------------------------------------------------------- monitorizare sistem
@@ -5628,7 +5783,9 @@ input,select,textarea{font:inherit}
 .arrow{position:absolute;top:0;height:calc((100vw - 2*var(--pad))/6*9/16);width:var(--pad);z-index:5;background:rgba(13,18,32,.5);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s}
 .slider:hover .arrow{opacity:1}.arrow:hover{background:rgba(13,18,32,.75)}
 .arrow.l{left:0}.arrow.r{right:0}.arrow svg{width:34px;height:34px;transition:transform .2s}.arrow:hover svg{transform:scale(1.3)}
-.card{pointer-events:auto;flex:0 0 calc((100vw - 2*var(--pad) - 5*6px)/6);position:relative;border-radius:4px;transition:transform .3s .1s,box-shadow .3s .1s;cursor:pointer;z-index:1}
+.card{pointer-events:auto;flex:0 0 calc((100vw - 2*var(--pad) - 5*6px)/6);position:relative;border-radius:4px;transition:transform .3s .1s,box-shadow .3s .1s;cursor:pointer;z-index:1;outline:none}
+.card:focus{transform:scale(1.35) translateY(-12%);z-index:10;box-shadow:0 0 0 3px var(--red),0 8px 20px rgba(0,0,0,.75)}
+.card:focus .thumb{border-radius:6px 6px 0 0}.card:focus .more{opacity:1;pointer-events:auto}
 @media(max-width:1400px){.card{flex-basis:calc((100vw - 2*var(--pad) - 4*6px)/5)}}
 @media(max-width:1100px){.card{flex-basis:calc((100vw - 2*var(--pad) - 3*6px)/4)}}
 @media(max-width:800px){.card{flex-basis:calc((100vw - 2*var(--pad) - 2*6px)/3)}}
@@ -5738,8 +5895,10 @@ body.fs .pbot{padding:0 28px 22px}
 .pctrl{display:flex;align-items:center;gap:22px}
 .pctrl button svg{width:30px;height:30px;transition:transform .15s}.pctrl button:hover svg{transform:scale(1.2)}
 body.fs .pctrl button svg{width:36px;height:36px}
-.pctrl .ptitle{flex:1;text-align:center;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pctrl .ptitle{flex:1;text-align:center;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;align-items:center;gap:2px}
+.pctrl .ptitle .ptrow1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .pctrl .ptitle b{margin-right:10px}.pctrl .ptitle span{color:#ccc}
+.pctrl .ptitle .ptendtime{font-size:12px;color:rgba(255,255,255,.45);font-weight:500}
 .vol{display:flex;align-items:center;gap:8px}
 .vol input{width:0;opacity:0;transition:all .2s;accent-color:var(--red)}.vol:hover input{width:90px;opacity:1}
 .pspin{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px;border:5px solid rgba(255,255,255,.2);border-top-color:var(--red);border-radius:50%;animation:spin 1s linear infinite;z-index:5}
@@ -5938,6 +6097,8 @@ body.casting{padding-bottom:84px}
 .mlist img{width:60px;border-radius:3px}
 @media(max-width:800px){.brandwrap .by{font-size:7px;letter-spacing:1px}#nav{gap:10px;padding:0 12px}#nav .logo{font-size:19px!important}#nav .links{min-width:0;overflow-x:auto;scrollbar-width:none}#nav .links::-webkit-scrollbar{display:none}#nav .links a{white-space:nowrap}#nav .right{gap:10px;flex:none}.avatar{width:28px;height:28px}#nav .links{gap:12px;font-size:12px}#nav .logo{font-size:22px}.sbox.open input{width:120px}.arrow{display:none}#hero .info{width:88%;bottom:18%}.fg{grid-template-columns:1fr}.fg small{grid-column:1}.pctrl{gap:12px}.pctrl .ptitle{display:none}.vol input{display:none}}
 </style>
+<!-- Cast Sender SDK -->
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 </head>
 <body>
 <svg style="display:none">
@@ -6208,61 +6369,234 @@ $("#rform").onsubmit=async e=>{e.preventDefault();$("#rerr").textContent="";
 let RESET_TOK="";
 async function logout(){await api("/api/logout",{method:"POST"}).catch(()=>{});ME=null;clearTimeout(expT);location.hash="#/";showLogin()}
 /* ================= GOOGLE CAST (serverul comandă Chromecast-ul) ================= */
-const CAST={devices:[],device:null,name:"",st:null,timer:null,scanT:null,drag:false};
+const CAST={devices:[],device:null,name:"",st:null,timer:null,scanT:null,drag:false,connected:false,mediaToken:null,mediaId:null,itemId:null,_player:null,_ctrl:null};
+/* ==================== CAST HIBRID: CAF (browser) + pychromecast (PWA/TV) ==================== */
+const CAST_APP_ID = "BEE3563A";
+let castCtx = null, castSession = null;
+// _isPWA: true daca SDK-ul Cast NU e disponibil (PWA, Android TV, etc)
+const _isPWA = () => !castCtx;
+
+// ---- CAF Sender (doar in browser Chrome, nu in PWA) ----
+window["__onGCastApiAvailable"] = function(isAvailable) {
+  if(!isAvailable) return;
+  castCtx = cast.framework.CastContext.getInstance();
+  castCtx.setOptions({
+    receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+    autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+    resumeSavedSession: true
+  });
+  castCtx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, e => {
+    const ss = cast.framework.SessionState;
+    if(e.sessionState === ss.SESSION_STARTED || e.sessionState === ss.SESSION_RESUMED) {
+      castSession = castCtx.getCurrentSession();
+      CAST.connected = true; CAST.mode = "caf";
+      CAST.name = castSession.getCastDevice().friendlyName || "TV";
+      updCastBtns();
+      if(e.sessionState === ss.SESSION_STARTED) {
+        if(P.live && !$("#player").classList.contains("hidden")) {
+          const cid=P.liveCh; closePlayer(); castPlayLive(cid);
+        } else if(P.media && !$("#player").classList.contains("hidden")) {
+          const mid=P.media,st=absT(),a=P.audioIdx,sub=P.subId; closePlayer(); castPlay(mid,st,a,sub??null);
+        } else toast(`Conectat la ${CAST.name}. Alege un film și apasă Redă.`);
+      }
+    } else if(e.sessionState === ss.SESSION_ENDED || e.sessionState === ss.NO_SESSION) {
+      castSession = null; CAST.connected = false; CAST.mode = null; CAST.name = "";
+      hideCastBar(); updCastBtns();
+    }
+  });
+  const player = new cast.framework.RemotePlayer();
+  const ctrl = new cast.framework.RemotePlayerController(player);
+  ctrl.addEventListener(cast.framework.RemotePlayerEventType.CURRENT_TIME_CHANGED, () => {
+    if(!player.duration) return;
+    const pos=player.currentTime, dur=player.duration;
+    if(!CAST.drag) $("#cbdone").style.width=(Math.min(100,pos/dur*100))+"%";
+    $("#cbtime").textContent=`${fmtT(pos)} / ${fmtT(dur)}`;
+  });
+  ctrl.addEventListener(cast.framework.RemotePlayerEventType.IS_PAUSED_CHANGED, () => {
+    $("#cbpp use").setAttribute("href", player.isPaused ? "#i-play" : "#i-pause");
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+  });
+  ctrl.addEventListener(cast.framework.RemotePlayerEventType.MEDIA_INFO_CHANGED, () => {
+    const mi=player.mediaInfo; if(!mi) return;
+    const meta=mi.metadata||{};
+    $("#cbtitle").textContent=meta.title||mi.contentId||"";
+    if(mi.images&&mi.images[0]) $("#cbimg").style.backgroundImage=`url('${mi.images[0].url}')`;
+    showCastBar();
+  });
+  ctrl.addEventListener(cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED, () => {
+    if(document.activeElement!==$("#cbvol")) $("#cbvol").value=player.volumeLevel;
+  });
+  castCtx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, () => updCastBtns());
+  CAST._player = player; CAST._ctrl = ctrl;
+  updCastBtns();
+};
+
+// ---- pychromecast (PWA / Android TV) ----
 async function castRefresh(){
-  if(!ME||ME.remote){CAST.devices=[];return updCastBtns()}
-  try{const d=await api("/api/cast/devices");CAST.devices=d.devices||[]}catch(e){CAST.devices=[]}
+  if(ME && !ME.remote){
+    if(_isPWA()){
+      // fara CAF SDK — folosim server-side cast (pychromecast)
+      try{const d=await api("/api/cast/devices"); CAST.devices=d.devices||[]}catch(e){CAST.devices=[]}
+    }
+  }
   updCastBtns();
 }
 function updCastBtns(){
-  const show=CAST.devices.length>0||!!CAST.device;
-  ["#castbtn","#pcast"].forEach(sel=>{const b=$(sel);if(!b)return;b.classList.toggle("hidden",!show);b.classList.toggle("on",!!CAST.device);
-    b.querySelector("use").setAttribute("href",CAST.device?"#i-cast-on":"#i-cast");b.title=CAST.device?`Conectat la ${CAST.name}`:"Redă pe TV (Google Cast)"});
+  const lan = ME && !ME.remote;
+  const hasPycast = CAST.devices && CAST.devices.length > 0;
+  const show = lan || CAST.connected || (CAST.st && CAST.st.active);
+  ["#castbtn","#pcast"].forEach(sel=>{const b=$(sel);if(!b)return;
+    b.classList.toggle("hidden", !show);
+    const on = CAST.connected || (CAST.st && CAST.st.active);
+    b.classList.toggle("on", !!on);
+    b.querySelector("use").setAttribute("href", on ? "#i-cast-on" : "#i-cast");
+    b.title = on ? `Conectat la ${CAST.name||CAST.st?.device_name||"TV"}` : "Redă pe TV (Google Cast)";
+  });
 }
 function castMenu(anchor){
   const m=$("#castmenu");if(!m.classList.contains("hidden")){m.classList.add("hidden");return}
   const tv='<svg class="ico"><use href="#i-cast"/></svg>';
-  m.innerHTML=`<h4>Redă pe</h4>
-    <button data-cd="" class="${!CAST.device?"on":""}"><svg class="ico"><use href="#i-device"/></svg><span>Acest dispozitiv</span></button>
-    ${CAST.devices.map(d=>`<button data-cd="${esc(d.id)}" class="${CAST.device===d.id?"on":""}">${tv}<span>${esc(d.name)}<small>${esc(d.model)}</small></span></button>`).join("")}
-    ${!CAST.devices.length?'<div style="padding:10px 16px;color:#888;font-size:13px">Niciun Chromecast găsit în rețea.</div>':""}
-    ${CAST.st&&CAST.st.active?'<div class="sep"></div><button data-cstop>■ Oprește redarea pe TV</button>':""}`;
+  const stActive = CAST.st && CAST.st.active;
+  if(_isPWA()){
+    // meniu pychromecast
+    m.innerHTML=`<h4>Redă pe</h4>
+      <button data-cd="" class="${!stActive?"on":""}"><svg class="ico"><use href="#i-device"/></svg><span>Acest dispozitiv</span></button>
+      ${CAST.devices.map(d=>`<button data-cd="${esc(d.id)}" class="${CAST.device===d.id&&stActive?"on":""}">${tv}<span>${esc(d.name)}<small>${esc(d.model)}</small></span></button>`).join("")}
+      ${!CAST.devices.length?'<div style="padding:10px 16px;color:#888;font-size:13px">Niciun Chromecast găsit în rețea.</div>':""}
+      ${stActive?'<div class="sep"></div><button data-cstop>■ Oprește redarea pe TV</button>':""}`;
+    m.querySelectorAll("[data-cd]").forEach(b=>b.onclick=()=>castSelectPy(b.dataset.cd));
+    const st=m.querySelector("[data-cstop]");if(st)st.onclick=()=>{m.classList.add("hidden");castCmd("stop")};
+  } else {
+    // meniu CAF
+    if(!CAST.connected){
+      castCtx ? castCtx.requestSession().catch(()=>{}) : null;
+      return;
+    }
+    m.innerHTML=`<h4>Conectat la ${esc(CAST.name)}</h4>
+      <button data-cd=""><svg class="ico"><use href="#i-device"/></svg><span>Redă pe acest dispozitiv</span></button>
+      <div class="sep"></div><button data-cstop>■ Oprește redarea pe TV</button>`;
+    m.querySelector("[data-cd]").onclick=()=>{m.classList.add("hidden");castStop();};
+    m.querySelector("[data-cstop]").onclick=()=>{m.classList.add("hidden");castStop();};
+  }
   const r=anchor.getBoundingClientRect();m.classList.remove("hidden");
-  m.style.top=Math.min(innerHeight-m.offsetHeight-10,r.bottom+8)+"px";m.style.left=Math.max(10,Math.min(innerWidth-m.offsetWidth-10,r.right-m.offsetWidth))+"px";
-  if(anchor.id==="pcast"){m.style.top=Math.max(10,r.top-m.offsetHeight-10)+"px"}
-  m.querySelectorAll("[data-cd]").forEach(b=>b.onclick=()=>castSelect(b.dataset.cd));
-  const st=m.querySelector("[data-cstop]");if(st)st.onclick=()=>{m.classList.add("hidden");castCmd("stop")};
+  m.style.top=Math.min(innerHeight-m.offsetHeight-10,r.bottom+8)+"px";
+  m.style.left=Math.max(10,Math.min(innerWidth-m.offsetWidth-10,r.right-m.offsetWidth))+"px";
+  if(anchor.id==="pcast") m.style.top=Math.max(10,r.top-m.offsetHeight-10)+"px";
 }
 document.addEventListener("click",e=>{if(!e.target.closest("#castmenu,#castbtn,#pcast"))$("#castmenu").classList.add("hidden")});
 $("#castbtn").onclick=e=>{e.stopPropagation();castMenu($("#castbtn"))};
 $("#pcast").onclick=e=>{e.stopPropagation();showUI(true);castMenu($("#pcast"))};
-async function castSelect(id){
+
+// selectare dispozitiv pychromecast (PWA)
+async function castSelectPy(id){
   $("#castmenu").classList.add("hidden");
   if(!id){if(CAST.st&&CAST.st.active)await castCmd("stop");CAST.device=null;CAST.name="";updCastBtns();return}
   CAST.device=id;CAST.name=(CAST.devices.find(d=>d.id===id)||{}).name||"TV";updCastBtns();
-  if(P.live&&!$("#player").classList.contains("hidden")){   // transfer canalul live pe TV
+  if(P.live&&!$("#player").classList.contains("hidden")){
     const cid=P.liveCh;await closePlayer();castPlayLive(cid);
-  }else if(P.media&&!$("#player").classList.contains("hidden")){   // transfer: ce rula aici continuă pe TV
+  }else if(P.media&&!$("#player").classList.contains("hidden")){
     const mid=P.media,t=absT(),a=P.audioIdx,sub=P.subId;await closePlayer();castPlay(mid,t,a,sub??null);
   }else toast(`Conectat la ${CAST.name}. Alege un film sau un canal și apasă Redă.`);
 }
-async function castPlay(mid,start,audio,sub){
+
+// ---- castPlay: CAF in browser, pychromecast in PWA ----
+async function castPlay(mid, start, audio, sub){
   if(sub===undefined){const ch=String(pref("sub_"+mid,"auto"));sub=ch==="auto"?"auto":ch==="off"?null:+ch}
-  showCastBar();$("#cbtitle").textContent=t("cast_starting");$("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
-  try{await api("/api/cast/play",{method:"POST",body:{device:CAST.device,media_id:mid,start:start||0,audio:audio??null,sub:sub===undefined?"auto":sub}})}
-  catch(e){toast("Cast: "+e.message,6000);return castTick()}
-  castPoll();
+  showCastBar();$("#cbtitle").textContent="Se încarcă…";
+  if(_isPWA()){
+    // pychromecast
+    if(!CAST.device){toast("Cast: selectează mai întâi un dispozitiv",4000);return}
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+    try{await api("/api/cast/play",{method:"POST",body:{device:CAST.device,media_id:mid,start:start||0,audio:audio??null,sub:sub===undefined?"auto":sub}})}
+    catch(e){toast("Cast: "+e.message,6000);return castTick()}
+    castPoll(); return;
+  }
+  // CAF
+  if(!castSession){toast("Cast: nu ești conectat la niciun dispozitiv",4000);return}
+  $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+  try{
+    const d=await api("/api/cast/stream",{method:"POST",body:{media_id:mid,start:start||0,audio:audio??null,sub:sub===undefined?"auto":sub}});
+    const mediaInfo=new chrome.cast.media.MediaInfo(d.url,"application/x-mpegURL");
+    mediaInfo.hlsSegmentFormat=chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
+    mediaInfo.streamType=chrome.cast.media.StreamType.BUFFERED;
+    if(d.kind==="series"){
+      const meta=new chrome.cast.media.TvShowMediaMetadata();
+      meta.seriesTitle=d.series_title;meta.title=d.title;meta.season=d.season;meta.episode=d.episode;
+      if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+      mediaInfo.metadata=meta;
+    }else{
+      const meta=new chrome.cast.media.MovieMediaMetadata();
+      meta.title=d.title;if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+      if(d.year)meta.releaseDate=String(d.year);mediaInfo.metadata=meta;
+    }
+    if(d.sub_url){
+      const track=new chrome.cast.media.Track(1,chrome.cast.media.TrackType.TEXT);
+      track.trackContentId=d.sub_url;track.trackContentType="text/vtt";
+      track.subtype=chrome.cast.media.TextTrackType.SUBTITLES;
+      track.name="Română";track.language="ro-RO";mediaInfo.tracks=[track];
+    }
+    const req=new chrome.cast.media.LoadRequest(mediaInfo);
+    req.currentTime=d.start_time||0;if(d.sub_url)req.activeTrackIds=[1];
+    await castSession.loadMedia(req);
+    CAST.mediaToken=d.token;CAST.mediaId=mid;CAST.itemId=d.item_id;
+    _castProgressStart(d.token,mid,d.duration);
+  }catch(e){toast("Cast: "+(e.description||e.message||e),6000);}
 }
+
 async function castPlayLive(cid){
-  showCastBar();$("#cbtitle").textContent=t("cast_starting");$("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
-  try{await api("/api/cast/live",{method:"POST",body:{device:CAST.device,channel:cid}})}
-  catch(e){toast("Cast: "+e.message,6000);return castTick()}
-  castPoll();
+  showCastBar();$("#cbtitle").textContent="Se încarcă…";
+  if(_isPWA()){
+    if(!CAST.device){toast("Cast: selectează mai întâi un dispozitiv",4000);return}
+    $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+    try{await api("/api/cast/live",{method:"POST",body:{device:CAST.device,channel:cid}})}
+    catch(e){toast("Cast: "+e.message,6000);return castTick()}
+    castPoll(); return;
+  }
+  if(!castSession){toast("Cast: nu ești conectat la niciun dispozitiv",4000);return}
+  $("#cbdev").innerHTML=`<svg class="ico" style="width:14px;height:14px"><use href="#i-cast-on"/></svg> ${esc(CAST.name)}`;
+  try{
+    const d=await api("/api/cast/stream/live",{method:"POST",body:{channel:cid}});
+    const mediaInfo=new chrome.cast.media.MediaInfo(d.url,"application/x-mpegURL");
+    mediaInfo.hlsSegmentFormat=chrome.cast.media.HlsSegmentFormat.MPEG2_TS;
+    mediaInfo.streamType=chrome.cast.media.StreamType.LIVE;
+    const meta=new chrome.cast.media.GenericMediaMetadata();
+    meta.title=d.title;if(d.thumb)meta.images=[new chrome.cast.Image(d.thumb)];
+    mediaInfo.metadata=meta;
+    const req=new chrome.cast.media.LoadRequest(mediaInfo);
+    await castSession.loadMedia(req);
+    CAST.mediaToken=d.token;CAST.mediaId=null;CAST.itemId=null;
+  }catch(e){toast("Cast: "+(e.description||e.message||e),6000);}
 }
+
+function castStop(){
+  if(_isPWA()){castCmd("stop");return}
+  if(castSession)castSession.endSession(true);
+  hideCastBar();CAST.connected=false;CAST.mode=null;CAST.name="";updCastBtns();
+  _castProgressStop();
+}
+
+// progress CAF
+let _castProgTimer=null;
+function _castProgressStart(token,mid,dur){
+  _castProgressStop();
+  _castProgTimer=setInterval(async()=>{
+    const p=CAST._player;if(!p||!castSession)return;
+    try{await api("/api/cast/progress",{method:"POST",body:{token,pos:p.currentTime||0,duration:dur||p.duration||0,state:p.isPaused?"PAUSED":"PLAYING"}})}catch(e){}
+  },5000);
+}
+function _castProgressStop(){
+  if(_castProgTimer){clearInterval(_castProgTimer);_castProgTimer=null;}
+  if(CAST.mediaToken)api("/api/cast/progress",{method:"POST",body:{token:CAST.mediaToken,pos:CAST._player?.currentTime||0,done:true}}).catch(()=>{});
+  CAST.mediaToken=null;
+}
+
 function showCastBar(){$("#castbar").classList.remove("hidden");document.body.classList.add("casting")}
 function hideCastBar(){$("#castbar").classList.add("hidden");document.body.classList.remove("casting")}
+
+// pychromecast polling (PWA)
 function castPoll(){clearInterval(CAST.timer);CAST.timer=setInterval(castTick,1000);castTick()}
 async function castTick(){
+  if(!_isPWA())return;
   let s;try{s=await api("/api/cast/status")}catch(e){return}
   CAST.st=s;
   if(!s.active){hideCastBar();clearInterval(CAST.timer);CAST.timer=null;return}
@@ -6278,17 +6612,49 @@ async function castTick(){
   if($("#cbsub").dataset.k!==opts){$("#cbsub").innerHTML=opts;$("#cbsub").dataset.k=opts}
   if(document.activeElement!==$("#cbsub"))$("#cbsub").value=s.sub_id||"";
 }
-async function castCmd(action,extra={}){try{await api("/api/cast/control",{method:"POST",body:{action,...extra}})}catch(e){toast(e.message)}
-  if(action==="stop"){hideCastBar()}setTimeout(castTick,400)}
-function castSkip(sec){if(CAST.st&&CAST.st.active)castCmd("seek",{pos:CAST.st.position+sec})}
-$("#cbpp").onclick=()=>castCmd(CAST.st&&CAST.st.state==="PAUSED"?"play":"pause");
-$("#cbvol").onchange=e=>castCmd("volume",{value:+e.target.value});
-$("#cbsub").onchange=e=>{t("cast_sub_change");castCmd("sub",{value:e.target.value||null})};
-$("#cbseek").addEventListener("click",e=>{const r=$("#cbseek .rail").getBoundingClientRect();const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
-  if(CAST.st&&CAST.st.duration){$("#cbdone").style.width=f*100+"%";castCmd("seek",{pos:f*CAST.st.duration})}});
-$("#cbseek").addEventListener("mousemove",e=>{if(!CAST.st)return;const r=$("#cbseek .rail").getBoundingClientRect();const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
-  $("#cbtip").textContent=fmtT(f*CAST.st.duration);$("#cbtip").style.left=(e.clientX-r.left)+"px"});
-$("#cbimg").onclick=()=>{if(CAST.st&&CAST.st.item_id)openItem(CAST.st.item_id)};
+async function castCmd(action,extra={}){
+  try{await api("/api/cast/control",{method:"POST",body:{action,...extra}})}catch(e){toast(e.message)}
+  if(action==="stop"){hideCastBar()}setTimeout(castTick,400)
+}
+function castSkip(sec){
+  if(_isPWA()){if(CAST.st&&CAST.st.active)castCmd("seek",{pos:CAST.st.position+sec});return}
+  const p=CAST._player,c=CAST._ctrl;
+  if(!p||!c||!castSession)return;
+  p.currentTime=Math.max(0,(p.currentTime||0)+sec);c.seek();
+}
+$("#cbpp").onclick=()=>{
+  if(_isPWA()){castCmd(CAST.st&&CAST.st.state==="PAUSED"?"play":"pause");return}
+  const c=CAST._ctrl;if(c)c.playOrPause();
+};
+$("#cbvol").onchange=e=>{
+  if(_isPWA()){castCmd("volume",{value:+e.target.value});return}
+  const p=CAST._player,c=CAST._ctrl;if(!p||!c)return;p.volumeLevel=+e.target.value;c.setVolumeLevel();
+};
+$("#cbsub").onchange=e=>{
+  t("cast_sub_change");const val=e.target.value;
+  if(_isPWA()){castCmd("sub",{value:val||null});return}
+  if(!castSession)return;
+  const media=castSession.getMediaSession();if(!media)return;
+  if(val)media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([+val]),()=>{},()=>{});
+  else media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([]),()=>{},()=>{});
+};
+$("#cbseek").addEventListener("click",e=>{
+  const r=$("#cbseek .rail").getBoundingClientRect();
+  const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  if(_isPWA()){if(CAST.st&&CAST.st.duration){$("#cbdone").style.width=f*100+"%";castCmd("seek",{pos:f*CAST.st.duration})}return}
+  const p=CAST._player,c=CAST._ctrl;
+  if(!p||!c||!p.duration)return;
+  p.currentTime=f*p.duration;c.seek();
+  $("#cbdone").style.width=(f*100)+"%";
+});
+$("#cbseek").addEventListener("mousemove",e=>{
+  if(!CAST._player) return;
+  const r=$("#cbseek .rail").getBoundingClientRect();
+  const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  $("#cbtip").textContent=fmtT(f*(CAST._player.duration||0));
+  $("#cbtip").style.left=(e.clientX-r.left)+"px";
+});
+$("#cbimg").onclick=()=>{if(CAST.itemId)openItem(CAST.itemId)};
 
 /* sugestie de instalare: iPhone/iPad (Safari -> ecran principal) și Android (APK) */
 function appHint(inApp){
@@ -6421,7 +6787,7 @@ function cardHTML(it,rowKind,idx){
                :`<div class="thumb"><div class="ph">${esc(it.title)}</div>${prog}</div>`;
   const meta=[match(it.rating),it.cert?`<span class="cert">${esc(it.cert)}</span>`:"",it.year?`<span>${it.year}</span>`:"",
               it.kind==="series"?"<span>Serial</span>":it.runtime?`<span>${fmtRun(it.runtime)}</span>`:""].join("");
-  return `<div class="card" data-id="${it.id}" data-rm="${it.resume_media||""}" data-rp="${it.resume_pos||0}">${thumb}
+  return `<div class="card" data-id="${it.id}" data-rm="${it.resume_media||""}" data-rp="${it.resume_pos||0}" tabindex="0">${thumb}
     <div class="more"><div class="cb"><button class="circ w" data-act="play" title="Redă"><svg class="ico"><use href="#i-play"/></svg></button>
       <button class="circ" data-act="list" title="Lista mea"><svg class="ico"><use href="#i-plus"/></svg></button>
       <button class="circ r" data-act="info" title="Detalii"><svg class="ico"><use href="#i-down"/></svg></button></div>
@@ -6738,7 +7104,7 @@ async function playMedia(mid,start=0,audio=null,keepSub=false){
   Object.assign(P,{media:mid,mode:d.mode,sid:d.sid,offset:d.offset||0,duration:d.duration,audioList:d.audio,audioIdx:d.audio_index,method:d.method,avail:0,startAt:start,remote:d.remote,quality:d.quality,qualities:d.qualities||[]});
   if(!keepSub){
     const info=await api(`/api/media/${mid}/info`);P.info=info;
-    $("#ptitle").innerHTML=`<b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span>`;
+    $("#ptitle").innerHTML=`<div class="ptrow1"><b>${esc(info.title)}</b><span>${esc(info.subtitle)}</span></div><span class="ptendtime" id="ptendtime"></span>`;
     const nx=await api(`/api/media/${mid}/next`);P.next=nx.next;P.creditsStart=nx.credits_start!=null?nx.credits_start:undefined;$("#bnext").classList.toggle("hidden",!nx.next);
     loadSubsList(true);
     // daca credits_start nu e inca in DB, polleaza pana il obtinem (max 3 min)
@@ -6794,6 +7160,17 @@ async function stopStream(){
   if(hls){hls.destroy();hls=null}
   V.removeAttribute("src");V.load();
   if(P.sid){const s=P.sid;P.sid=null;api("/api/play/"+s,{method:"DELETE"}).catch(()=>{})}
+  if(P.live&&P.liveCh){
+    const cid=P.liveCh,q=P.quality||"orig";
+    const payload=JSON.stringify({channel:cid,quality:q});
+    // sendBeacon garanteaza trimiterea chiar si la navigare/inchidere pagina
+    if(navigator.sendBeacon){
+      const blob=new Blob([payload],{type:"application/json"});
+      navigator.sendBeacon("/api/live/stop_beacon",blob);
+    } else {
+      api("/api/live/play",{method:"DELETE",body:{channel:cid,quality:q}}).catch(()=>{});
+    }
+  }
 }
 
 /* ---- TV Live playback ---- */
@@ -6805,7 +7182,11 @@ async function playLive(cid){
   await stopStream();
   let d;
   try{d=await api("/api/live/play",{method:"POST",body:{channel:cid,client:CLIENT,quality:pref("quality","")}})}
-  catch(e){spin(false);if(!ME)return;toast(e.message,6000);pl.classList.add("hidden");pl.classList.remove("live");if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});return}
+  catch(e){
+    // retry automat o data dupa 1.5s (TVheadend poate fi ocupat cu eliberarea tunerului)
+    try{await new Promise(r=>setTimeout(r,1500));d=await api("/api/live/play",{method:"POST",body:{channel:cid,client:CLIENT,quality:pref("quality","")}})}
+    catch(e2){spin(false);if(!ME)return;toast(e2.message,6000);pl.classList.add("hidden");pl.classList.remove("live");if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});return}
+  }
   Object.assign(P,{live:true,media:null,liveCh:cid,method:d.method,quality:d.quality,qualities:d.qualities||[],remote:d.remote});
   $("#ptitle").innerHTML=`<b>📺 ${esc(d.channel.name)}</b>${d.channel.now?`<span>${esc(d.channel.now.title)}</span>`:""}`;
   $("#nextep").classList.add("hidden");P.nextShown=false;
@@ -6817,7 +7198,7 @@ async function playLive(cid){
     hls.loadSource(d.url);hls.attachMedia(V);
   } else {V.src=d.url;V.play().catch(()=>{spin(false)})}
   V.volume=pref("vol",1);V.muted=pref("muted",false);$("#rvol").value=V.volume;updVol();
-  showUI();clearInterval(saveT);clearInterval(liveT);liveT=setInterval(livePing,10000);livePing();
+  showUI();clearInterval(saveT);clearInterval(liveT);liveT=setInterval(livePing,4000);livePing();
 }
 function livePing(){
   if(!P.live)return;
@@ -6848,7 +7229,7 @@ async function closePlayer(){
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   cues=[];renderSubs(true);route();
 }
-addEventListener("beforeunload",()=>{if(P.media)saveProgress(true)});
+addEventListener("beforeunload",()=>{if(P.media)saveProgress(true);if(P.live&&P.liveCh){const payload=JSON.stringify({channel:P.liveCh,quality:P.quality||"orig"});if(navigator.sendBeacon)navigator.sendBeacon("/api/live/stop_beacon",new Blob([payload],{type:"application/json"}))}});
 function spin(on){$("#pspin").classList.toggle("hidden",!on)}
 V.addEventListener("waiting",()=>spin(true));V.addEventListener("playing",()=>spin(false));V.addEventListener("canplay",()=>spin(false));
 V.addEventListener("play",()=>{updPP();setTimeout(()=>saveProgress(),300)});V.addEventListener("pause",()=>{updPP();showUI(true);saveProgress()});
@@ -6915,7 +7296,8 @@ function tick(){
     if(!drag){$("#sdone").style.width=(t/D*100)+"%";$("#sknob").style.left=(t/D*100)+"%"}
     let be=0;try{for(let i=0;i<V.buffered.length;i++)if(V.buffered.start(i)<=V.currentTime+1)be=Math.max(be,V.buffered.end(i))}catch(e){}
     $("#sbuf").style.left=(P.offset/D*100)+"%";$("#sbuf").style.width=(Math.max(0,be)/D*100)+"%";
-    $("#sleft").textContent=fmtT(D-t);
+    const rem=D-t;$("#sleft").textContent=fmtT(rem);
+    const etEl=$("#ptendtime");if(etEl&&rem>0){const e=new Date(Date.now()+rem*1000);etEl.textContent="Se termină la "+e.getHours().toString().padStart(2,"0")+":"+e.getMinutes().toString().padStart(2,"0");}else if(etEl){etEl.textContent=""}
     renderSubs();
     // threshold: credits_start din DB (undefined = inca se detecteaza, null = nu exista next ep)
     // fallback la D-30 doar daca nu avem next ep sau durata e mica (evita aparitia prematura)
@@ -6945,7 +7327,28 @@ requestAnimationFrame(tick);
 
 /* keyboard */
 document.addEventListener("keydown",e=>{
-  if($("#player").classList.contains("hidden")){if(e.key==="Escape"&&!$("#modal").classList.contains("hidden"))closeModal();return}
+  if($("#player").classList.contains("hidden")){
+    if(e.key==="Escape"&&!$("#modal").classList.contains("hidden")){closeModal();return}
+    const cards=Array.from(document.querySelectorAll(".card[tabindex]"));
+    if(!cards.length)return;
+    const focused=document.activeElement;
+    const ci=cards.indexOf(focused);
+    if(e.key==="Enter"&&ci>=0){e.preventDefault();focused.click();return}
+    if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)){
+      e.preventDefault();
+      if(ci<0){cards[0].focus();cards[0].scrollIntoView({block:"center",inline:"center"});return}
+      // calculeaza cate carduri sunt pe rand
+      const rect0=cards[0].getBoundingClientRect();
+      let cols=1;for(let i=1;i<cards.length;i++){if(cards[i].getBoundingClientRect().top>rect0.top+5)break;cols++}
+      let ni=ci;
+      if(e.key==="ArrowRight")ni=Math.min(ci+1,cards.length-1);
+      else if(e.key==="ArrowLeft")ni=Math.max(ci-1,0);
+      else if(e.key==="ArrowDown")ni=Math.min(ci+cols,cards.length-1);
+      else if(e.key==="ArrowUp")ni=Math.max(ci-cols,0);
+      cards[ni].focus();cards[ni].scrollIntoView({block:"nearest",inline:"nearest"});
+    }
+    return;
+  }
   if(e.target.tagName==="INPUT"&&e.target.type!=="range")return;
   const k=e.key;
   if(k===" "||k==="k"){e.preventDefault();togglePlay()}
@@ -8442,828 +8845,718 @@ BAAAAQBAAAAQAAAEAAABAEAAAAQAAAEAQAAAEAAABAAAAQBAAAAQAACecf8B/nSVKGiGOr4AAAAA
 SUVORK5CYII=
 CINEVERSE_B64_EOF
 base64 -d > "$APP/static/CineVerse.apk" <<'CINEVERSE_B64_EOF'
-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
-e7hyuIe8BMkyEfar/n3dyztOa+56olAXxytqLThug6SYx95RW31hin5wQOT0CVXi+MQhROiMCo4g
-gcod/e08XsAG1ktYilGgFGVtokG65oQyeItpy3WHMbp4yqZbLiIN1bEMPrCmvvtjndL6eMq243VR
-hNChy59gxciyWvJugT+qigzsi0SQ6Rxp1ovqZ6kgmPEvXRLkHXmacOTGp4YjOL1Ej99SReEL+337
-qk3NiaeKCWQ5jsVBOUEX5uB89s7yqjNJeRfKZYMiA1MKTbTo4jmZw2sy6bP0E+Ej3DslTA1QgmRI
-hClVFeWuXPz1a+p7vnu8vf4JJ0B3NIhEOCNJ9NIc+b2qyGkCTKnSns6hZK6EMCzpqKAdwVwSSAZF
-cOF+jznltpbo59bWxx6OX++uBracoJaQLMIFcTGs5QAvsnqIGr8q6JtV+eWKyEklgXaIDGTT+lAX
-5QUbjloGdSrWFKSCUI43fEp1UlQfFCd/o8h9J0/teqHDLpAT3AuVRbxQ7gFwnWFuYnh4NMur52Tq
-X69wrqr8lAirB0Rig0TwqEmgJYyis5oDdVVyGEf5sUO/5YRvCvrwqvqe7Z3ymFDXX5QhAFkCHuNg
-ntQ90bd3ZGS5ZpVT6z5/BcqZCVLLhVc4ZTi3VsCSQdwMFC/aTjzbcpF2VWRbin86cekzwwde3Dmb
-89sMuVhKN5MM8XFPqZpx9xS2hnuaXLXEiniy1AkBSPQWQDjqerN5jSVfCIr3ybOAYwsGg8FgMBgM
-BoPBYDAYjgH/H1q8YQrHcF/oAAAAAElFTkSuQmCCUEsDBBQAAAAAAAAQIQBJ0N9wyAYAAMgGAAAO
-AAAAcmVzb3VyY2VzLmFyc2MCAAwAyAYAAAEAAAABABwAAAEAAAYAAAAAAAAAAAEAADQAAAAAAAAA
-AAAAACUAAABKAAAAcAAAAJcAAAC/AAAAIiJyZXMvbWlwbWFwLW1kcGktdjQvaWNfbGF1bmNoZXIu
-cG5nACIicmVzL21pcG1hcC1oZHBpLXY0L2ljX2xhdW5jaGVyLnBuZwAjI3Jlcy9taXBtYXAteGhk
-cGktdjQvaWNfbGF1bmNoZXIucG5nACQkcmVzL21pcG1hcC14eGhkcGktdjQvaWNfbGF1bmNoZXIu
-cG5nACUlcmVzL21pcG1hcC14eHhoZHBpLXY0L2ljX2xhdW5jaGVyLnBuZwAJCUNpbmVWZXJzZQAA
-AAIgAbwFAAB/AAAAZQB1AC4AbgBlAHQAcwB0AHIAZQBhAG0AaQBuAGcALgBjAGkAbgBlAHYAZQBy
-AHMAZQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACABAAAFAAAAfAEAAAQAAAAA
-AAAAAQAcAFwAAAAFAAAAAAAAAAABAAAwAAAAAAAAAAAAAAAHAAAAEAAAABgAAAAhAAAABARhdHRy
-AAYGbWlwbWFwAAUFY29sb3IABgZzdHJpbmcABQVzdHlsZQAAAAABABwAWAAAAAQAAAAAAAAAAAEA
-ACwAAAAAAAAAAAAAAA4AAAATAAAAHgAAAAsLaWNfbGF1bmNoZXIAAgJiZwAICGFwcF9uYW1lAAgI
-QXBwVGhlbWUAAAAAAgIQABAAAAABAAAAAAAAAAICEAAUAAAAAgAAAAEAAAAAAQAAAQJUAGgAAAAC
-AAAAAQAAAFgAAABAAAAAAAAAAAAAAAAAAKAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAACAAAAwAAAAABAlQAaAAAAAIAAAABAAAAWAAA
-AEAAAAAAAAAAAAAAAAAA8AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAACAAAAAAAAAAIAAADAQAAAAECVABoAAAAAgAAAAEAAABYAAAAQAAAAAAAAAAA
-AAAAAABAAQAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAIAAAAAAAAAAgAAAMCAAAAAQJUAGgAAAACAAAAAQAAAFgAAABAAAAAAAAAAAAAAAAAAOABAAAA
-AAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAA
-CAAAAwMAAAABAlQAaAAAAAIAAAABAAAAWAAAAEAAAAAAAAAAAAAAAAAAgAIAAAAAAAAAAAQAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAIAAADBAAAAAIC
-EAAUAAAAAwAAAAEAAAAAAAAAAQJUAGgAAAADAAAAAQAAAFgAAABAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAABAAAA
-CAAAHSASDf8CAhAAFAAAAAQAAAABAAAAAAAAAAECVABoAAAABAAAAAEAAABYAAAAQAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAIAAAAAgAAAAgAAAMFAAAAAgIQABQAAAAFAAAAAQAAAAAAAAABAlQAsAAAAAUAAAABAAAAWAAA
-AEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAEAABAAMAAAAuAgMBBgAAAFQAAQEIAAABAAADfzMEAQEIAAAdIBIN/zQEAQEI
-AAAdAAAA/zUEAQEIAAAdFAnl/1EEAQEIAAAdIBIN/1IEAQEIAAAdIBIN/1BLAwQUAAIACAAAECEA
-CzOAyxkpAAAwUwAACwAAAGNsYXNzZXMuZGV4lXwLYJxVlf+538zk1bSZTNImmTbNJA3tpLR59UHa
-pKVpmj7zoklTSFraSfK1+ehkZjozaVNLeapVF7GIIioirqDo6gr7xxUVBG1VdsUVXVZxRRd23RVX
-VFBxYWW3/985987kS1pYafr7zr3nnvs6995zz/lmkjF7qqBx1Roa/vLzv77p0n/70svxsyt+O/Kd
-tviv596y5qtf/UFjP1GCiKYGVwfI/Du4m+hmpfkR4NocomEuyCNaCrKlkOj7oOm5RCWgr+PxdBvR
-vgUoayLaCuwA9gOHgCPAKeCZZqI5q4nmAauAtcA6oA3oBLYDvcBuYC8wBIwAbwOuA94N3AXcB3wB
-+BLwFeAbwHeBnwD/BvwKoDVE5cASYAjYD0QAGxgHokAcSAHHgWuBm4B3An8BnAHuAO4CPgF8GXgO
-OA8E1xKtBg4C7wA+DXwDeBb4LTDnMqIQsB7oBY4B7wU+DzwF/BHwtxA1AL1AGvgM8B3gN0DJOqIm
-YBdwBLgDeAh4EngJmL8e0wOuBI4DtwOPAb8CylqJOoA4cC/wI6AAa9MKRIGPAd8H/gRUbcB6AdcA
-Z4AvAk8DvwF8G4lqgNVAD2ADJ4D3AZ8EvgY8C7wCzL2caDnQDewHjgO3AvcBXwN+BPwayNsE3QGX
-Av3AJHAH8CDwJPCvwGtAYTv6Bi4HtgF9wFXAQeBa4G7gPuBB4CHgUeDrwLeAJ4GngH8CngWeB34B
-/Br4A/AnwLMZYwEKgSKgFCgHKoFqYC2wBbgCGAQOAlPAe4DbgQeAJ4H/AlQHUT7gBxYAYWAF0Axs
-ADqBIcAGjgJTwPXAu4DbgI8DnwG+CDwKfAv4AZCzBW0CC4AqYBmwAlgFbAP6gL1AHLgN+Cjwt8Aj
-wDngO8BTwE+AXwLUifaAEFAHrAN2AcPAOJAG3gPcDtwDPAh8DXga+BfgZeA1YO5W6AoIAcuAtcBG
-oBe4ErgaOAykgeuBdwLvAz4O/BXwGPBN4HvAs8C/Ai8CrwDngbxtRMVABVAFXAKsB3qAASACHAYS
-QBq4GXgv8Angc8CjwPeAfwFeAF4F8rejHWA90AXsA8aBBHAcuBm4FfgI8GngQeArwOPAt4F/AP4R
-+Bnw78CvgFcAtQP6AKqBBmAt0Aa0A33AMBABHOBtwB3AZ4GvAd8HngdeAXw7sW+AjUA/4AA3AZ8G
-HgF+BPwCoF1EC4FmoA3YCVwNJIEbgQ8Cnwa+Dnwb+AHwLPBL4FUgtwu2BVgI1AArgVVAK9AB7AL2
-AMPAQcAB0sC1wNuBM8CdwMeBTwFfAB4GHgW+DzwN/CfwKuDrRj8Y8iVAWJtjgmkkmD6CiSOYMYK5
-IpgngikimByCKSGYCYIJIBxTwvGiDr5v9PYlbA/CchJUTzu0OghdEbqiHqAX6AOuAHCFEa42GgD2
-AIPAXuBK4CpgiPSdtg/YD1wNHOC7z9x5I8AoMAbYwCHgMDAOOMA1wBEgCkwAMSBO+s48CiSBFN+R
-wCRwDDjO9yxwAngbcJLvVuAUcB1wPXADcCNwE3Az8HbgHcA7gdPAu4B3A+8B/gK4BXgvcCvwPuCj
-wF8BXwAeMPpX5l5fatL3N+DsmvQDSNeBWsDDSK8A9RqZBpN+HIkmk34C6eXaFZB/TSbN/EbQfOAp
-IzPHyNSb9DOGP9fwG0z6AcMvNnxOl7jSpS75CuDnRn6x4cOtoCXAi4a/0VW33ZXucLXT4eq30/BX
-mDTPfaVJv2r0IDKN0+k8V/oBo59Oo4dVJu2HzKVm3y5q1O1vdel2q2sM3a6x8T6ubdT8K1zj3+1K
-D7jSg67xD7rav8qsXaPZ75l1GXb1NWzm0mjOwlNmLpxeAeZqk17dqPfWflP3YybNfd1t0qyrj5t0
-G+TvMentrnSfK32lK81rmkkfBP+TJj3uSidc8ve45KfA/0uTvgHp+0z6FlfdO5H+TKauq537XTIP
-IP0pk37YJX/OJf+kS/5pF/9ZVzrPJfNzF/+Ma8y87hmZF13yf3CleS/da9Kvg//pTPtYoPtNurRp
-Wr4W6c+a9AqkP2HSq5u0TbjarN3nTLoN/L82adbP5006z5XmcRbgB649zYPF+ADva+zuatl7aymq
-eI9rusLQldhVKaGdNKX4/Gt+A3ZZTGgnTSrec800IbSTkkIVpU3+mOJ9qMubMJLjis+5bmeVoasN
-XWPoWtS7gzS9S2iQnhRaTN8VepBWGrl6QxuEDlKz0HxaJbSGLjflW4RW0bWK7y1Fj8vdpUgpvr8U
-fVXuMCV26Ur8fBDUgxGXCG2hRUrnFxtaozR/qWJ7epnIeSmH/lZoEz0s1EddSvO7hXppQGn+VaA+
-tPA05HJhNUrE/jbRo0LzaK1iG5xL/yi2eDH9QWzvHPoOaCGs/ArFNncuXSq0nOKK7W4zXanY5jbT
-Q6Tpt4TOo5+L/W2i54VW0r8J9dOLQgeoUzFtp62gZdDTn8APQr5S8f2v9bCI5tN/gFZiBH8UOkg+
-xfa7nP5L7PgAbVOa7jK0x9A+Q68wdLfQZuo3+b2GDgvton2gVdgR3G8V7aQvCh2kbwhtou8J7aFn
-hAbod0LLZVxc/prQLpor7RTTBkM3C22m7ULbqNfk9wvdQFcL3UwHQENm3tXYqUxrzHhqsGO+JHQd
-rVdMdXtLWNNCmyii+FxtFfnlyG+S86Xzl5r8CpNfYfIr4elwfqXJ15vyenhJSyTfJbQBt16J2H0t
-1wjPqkSuNZ1vwn4vkTtd55tNO83wqr4udJA8wh+gJjmHunwV7MO/C22ikPBbaZmcT12+GrfP60I3
-UbXwN1Kt0MsNvZIOyjnW8mtw01XJudN6XIt9e470Ofwpaf5zpM/r74WW0StCi+hVoYulv7UYp2Xa
-KRRaSeUmv1CoPp9rzflca87nWozoElO+1NRbLrSeVgtdSC1C91Cb0F3ULnQFdQhdRzuFQmNCe2lE
-6FqyhV5BhxT7wnp+LYauM3S9oa2Gthm6AZ6vpk30baHltE6xz7xN+JuR/7X4Nlq+Ex7APwkdJK9i
-qqhA6BD5hS6mVpM/LDRI1wgtp4TQRfQ2xX6Kbm8rdvYjQqsNrTFU25FtkHtKfPRS+oWhvzI++8tC
-m2mH0nSP0AEaUuzLl9MvxacfpFzkd8Jr/U/S9DdCBylHaZqn2OfvkvF0od4LJgb4rcm/JHQJhRXH
-BIvpH8Sf0uPvhQecrzhGqKU5in2rQfof8bEWUJli/2qQ/lf8rAW0QHH8oOsNQI//T6iuv8fk95j8
-ICKLx8T32kU/FtpEo8JfRmOK444wlQqto/mK/bJB+hfxzyrov8U3u5T+TuhyKlLsk+l+h3Gi10he
-63ef4e+DZJ3kG6R8H06wppV0mVAtv9zc9x3G9zjDsRic8b/q0/xL36D8kb5pf/Ji5d815SsvUt6C
-8p/1Tfv9mfI7TXkfmL/rm/Y/Z9c/iPI84/Q2XqR8CuWLrpiOPWaXn0H52ium4wJy+f1cfj/Kd5ry
-VYa/0FX+FMpHTflqww+5yp9D+bWmfI2r/XtM/y+h/GOmfK2JsTyu+jzpv0b5rX06Fi52je92njPK
-S42j33KR8k0or0L57X06hp5d3scxHMo/3Kfj69nlB1G+DuUf79Ox9+zyBMq3ovy+Ph2Xzy6/AeX9
-ZnwcM96DYOXTvTr9oEnznB/u1fP+uuE9YWR+7JJ/zpX+hSv9G9BXTDsc0Gd4Hld6nitd0adlaw1d
-ZcraQDtc6R5X+ipX2nalj5o2TgnPknQegrMcPo/KQwn/GfGEuYTLikzZgN9DMX/SlOl687P1vBfU
-W5St572gXk22ni9bz4sS1mddN/vjqNfoo6A6S0EMPNZ4E/mteSj3SP2Gbh2TD6tcGrZyZrRhQeay
-bvZVuI1cKlGPWEdDJ+HRFaK9oIqFnkS6QLWoOTTQlAM/bqA5h2Khv0PNxWoefMbFahme4T/pPVCC
-9krE11S4LUhGaaGlzZXT+mvPzifPpQdLdL7dlFWpTvSyG33zOHVZb7e2AUHwYqHbkC7Anl9CA6E8
-2OIQ9MYnvADnJOjirRVPN6j+GXXu4LmgToGr/DLpn/MxP7+9Cf93Rm9DWb3lQ28FF+h+BOVFord8
-tAX94HRwmwNNBRSwYo2rZRXYP/dJe+PdPBJubw7am0fDnkK6yjt3VruKkt36ndJAo2mzCeNrLsS6
-JtBiIXySrajzEUgGrVNYoY/h/i1Uu5vnYoZ3STqI0Wb4R/3fEw1wXokm8iTNKxzz3y1lA03oqbiY
-aqwGRNX9sJSx0HWozevr7u36bG8x//uk5lH/hw2d3ctNanYv4Xv1Hpkj8dLmzRk9X5fVcxHts/xZ
-fXhkfxK9s1u/2ylRN9CekB/ry+tVJLqJ+eOm3zLZKxfyy8EP/yGz927N7r3ibD85EkkRfbBbv38a
-CPE6LsLMGymxZw9VdyRDj0nrZFqBvezWNiLgL5L9yfvhvm79Xovr16gmaHIvVXtYk5m6uvbns2MI
-YAzV2blyGw8ZXQSK+Y3j0cYA5lII+IwuvtKt7XDAE7AGNgUwTvh8qImZSw6xTztocTlmvgX9MnfY
-U25Ksd9DG3iHIhcLHTWpwMux0I1GdgC+cwtObyad9PNtp1spo/B3c8SqEP19t77vAr8baNSjaMGc
-WNrHYwFv2Fuuqa+MtMxiaKUaWmmnapyODsQUmh/CyubJyPwiGSjmsZl0RI8t/MNp/f1zVn8l0N8m
-s4aW6PD5bn1PBrADfyInfr5YLw9O6kB7CTRThb3xfvF810H/zIuF3gafr1ANbEZ5TZXYlmop/8X5
-gU0lGHUu9v6XscdLMbtCT6JxrqzrzRhXwB9+Gtbvf2rlPYjs67U+o6PfdpOs+1GxhHwOgmK9ciig
-2Dp4YD9zJXoneq2bRKolZyEktK3KEVuFMYUAqsryZH3AC6oKJbbex+14pZ2cHu2nHcRYSlQZrfYv
-w6rUoheuV430Ep4DxjL/InYR+77RtOuvQV+FFp9vCzRzp3jFnuMs9pCcmVhoBH5XgdjBzPos7Mms
-T2n2jOXJTHGX9WTuuVKK7Xk7hTqm78D6Hv0+N+Hne4N1NeyvMnShoUFo8xsy8mH/IqzysL9CdJxj
-brvLerQf2uIJo8bPKFB9NPQtbYVC38aNwTPn2JH3RJnstG+au+7DdDT0oEk/iPVWsLcfFHtbDKtw
-tLGKVvtgw/5bv38u1mu9TJ9LRdt69Dv8dbDnPFLeY7qXAsmzRboT2kMLvw/iHo+FPiD36jo1f4aF
-pWkLayxpxnrWqC5KhD4HXg1pee7lCyxjsWyIR24VUyYd83/eXWbF/H/Nux5RYo2rhaDHLzW0ZkRC
-8S3itttcbrnt+Ed4RuFX9EzDt6+Uz2BEH8fy5Bzm0l7og2O7gKrx7ENf3wEXa4f9+l3y5LB29E72
-gwsvo/EfcBqC9COky0hkVG5jMddG9FZj6dFaMpIRzCXonSvpzTKvu2WHsm74Pn9AxliFaDIW+iQl
-8LwXT5y40H3oLebnN8MFVok6o1YHJpHnN7B8S17L2lIl3ttU8+YcKvE+Qas2T8iqMT/ovU7xOWmX
-NY1A05WyIjVePTavjGeMCr1Bn9bYANI8Nqy5l8fWLmPjtqqUHttRGdtRCnpLKXAJ71Nd5xMilRkR
-79tSuXHP8ep4W7wfo0Ap79t2uemDCjnob4k3iFmx7paoFpy1mJ/fvec21tH+89wmzzL83rkqtzr8
-H+zZBbxcq8QbVD9yzSLo+9D06LEPakXb+Rdom/spscJPzlXSliVtWdxW0LqTdGkLfeO8HkX40bmU
-a+WW8loHXKvt2vm+26SPK4xvYZmdq32Nu7UmZF+0eD8krXop/H7daotXz9ZLyyzML5DrDf8Xl4T/
-YHLfRM4f/lxudR0553X8thiWZqPElAXyWV07enhAfJMCOiuxboG8o5gL+5sr7+YWkO+6zU+oXS+p
-h63r8Nz8mPWwRfj/CLJnrc1vt75g8TtYfY/f1qPjvXU5PnP+ayw+eZeLpUk03koHVSL0F5hnjUfr
-wANrFvO/l2eONS6hZ3CgSnxn1Jo+vdc7sKtLvOzXfZQ2kfKH/zPmv4XPBLTj4VP5vULzmdw96Pt/
-xUeoUf1o+8sY01H59KLQarF6cAd8EfX49G1H+m/lbPO70ZifPxXgHfYbaPizkl7nfQHp+42P95C5
-x/htR6E36f8S+uN2fng+6X9YrFsV7aCQbzu1+H6HevwJRYGvxfci0p+SuiW+eszgdoRxBb5Y44eo
-EaclGXoEIwz/uMbXi9H+DfZuoHFJzgFamsOfLiT9j/Lq53JvudLbEHFvudJbJ2y4Ki1R52lN6Uvn
-q8dV85qbttIWlWPV5Gu95lOwQFvVz1BhPtN80GDBHJrm3YVRF+aXFPTRqk/w/UdSVuHae8nQV+BJ
-PKMspQLh79UU6LZh2+do+/kVKizgdoKuOuGfPaO8SpWGH6xRw5B/gu9krN1R/1lZi6T/q+JP8Mw8
-MrNimZnHzKzGuxI7pYe8iv3PzRR+Mel/HKu1wDsEK3gJJTd9jTb7irHh9N0fxcbOC+nPvHOND/IY
-9sJT4nX8q/g1fdLPZdiJ2iqjRG2B51MlZ9aPE3wSNqUom2tErjybC0ByYTb3QxrYHMzmcDu3LyRN
-wfU/JetdjJ6PqOmeizH7FHsW8E7uKcpEmhnp8C+D9PeucTa7pN9VYqTF5nFcCh8N+3khDW+qwkgq
-oTu/2I2gZ4tKNhahNvaWf568YV+Ou3M7dM/euFf647s1/GCQNmZHx3FhkM67+kf0Q5ei5s5szSDd
-qMJ3BGEjZkqtgFTXTKmbg9ThmjnOj3yiz7P9e6F1lDwfpBtUHcXOZ2LcF7Be8+Vmj5s7t0JkWzx5
-0EFOWSy0QKIJvs84xXF3Jh79XY9+hzfQWJXxP9Cv9j9kT8OHY59zoDHksrwDzVXZWDFoFdIFVjfE
-t3T436f7ea2HNcr9sNdfIu0F1fezMW8NrYI29vOne/4DOroWiVzYwHqU9HF8KZLh3+eZ2AlHH/cB
-bNYrAW+gJB5SdAzj/ibkJijHC2/vYCUNALxb+R1HEt4B+2bDB6vEn0mENsPnHT6I+AcIwt8/6i8x
-3kwnxl+DE5UINYoMop6DoVkyrRxvcO0IdGPpKGW3j6MUv8X8WOgG7EOuF/OvMV5RHc8wFJbnMnle
-KjtgqaSXy7NenivBD1THQit4JFnNx/yXiB2Y1r7lWomii6xEA+pno4lQJdrO5HjcscbF5PfwGGtU
-M2Z7FbGfgrE3NsksmL8a/Aj4sdDlMmPm6dVi3sYsbw14h4XXBl5Lbp6ee2gdfKl58oYqh8KvU9Z3
-r+vVsc4AvPKk/+uSYl3xO9W4n6Wm/fyGXh0nx/0euZnc0dE8eXek4/E1vdqXD5QErEBiVQ5OeV8F
-dtxCoQE1fEUFVd+4AVHGFpVnrVN+/tTR2ooNFViyFeYvsHorNm2s7+00v3kedlMtvPit5PNwX/wZ
-RPiPJNEMn7stvfq7KvGQFzqXsYfWw1PQsYWObHb16u9lsE/KHl3fjLX8wqy1LHat3+dnlLGfzT7o
-BpyUad8244k3G1+dTy/fKNYsT9wdExTTDE/8Nf1+xfjiO3wmVhvs5dgUdnnJQsQnsE5wEoZr+R0Z
-n4JnSZ/weejPJzHUwV79PQBovXQ6jlxuYspFtBbxZBA3Xix0jYkrEYltWoLybqiqG6FooLo7j1Sg
-qTuf1DDWasmmg+jpK/zptRU4Gms8RT7YoaONR2g8v1DVWF6JrdnOJ0I+jHl6jy9Eq7B+uM+CHt7h
-OdBPSy5y9BHJWbmx0ByO9qkS0mxNAv5YqAB0hH2jxnyyoO9c1i/9ABIxiX6r2D8OFWJ9XZEQViMb
-O816cxUolp2jsjvnL2e+F3s/zX4vNnulpL43W/+mRvkuhqzTrUrek+qzcVOv9uEycXOGf/oN+Le8
-Af+2N+Df8Qb8j87i83e33f/GTT7z3TH+fl0avGtnyd0yS67fyN05i7/H8O+dxd9r+A8YfuazEv6+
-0iML9PeTmO4z9Nys/p+alX92Vv4Fk/eaPH8/76UF+rt3TK819HpDX51V31s2M++flV80Kx+elV89
-K6/M9xmZlhs639AMOg31GtpuPmvpxI+m+l5WEt9rmSKjuxyJbLR8Zq03GpkOI9MpP9NroMz3zHTb
-HYZebfo4KN+LVKTf4yjxNTWda2ixqYv43dCgfi9k5lCFHPfokXSlnHVL0p2GXi3yIcPn7/945fO7
-TpmrJWkts9bIbJQS/V1RS+aW0c1cQ8uzc83ostP8+FxpKzvvYZG72uQPmn4t+caoClEg1OHE7EE7
-mbLbY2PJuDPWQLlLGrc0NTc3kidcN0j+8OVO3dXj6XQidfn6hob65fSMFT40GRtNO/FYuO6kcyh8
-3ImNxY/XHzgwemx7PH6kLmmnJ5Ox1lnsDU2txyLJUGLDoUg0ZbdmmghNohEuiGwY3l+fijqjdv1o
-JBoNj8VHJyfsWLr+6KSdPNFvR+3RdDzZjpJlx5wxO76srq4+FZ+wpwczVXdSdx2qnqpPRCZT9tjS
-pUjasTFOTdUn7cjYif50JG1vbD5V14qhR6o3bEjUnUxsiLROKyKRqE9EIyec2OFwpO7UqeFlnFu2
-YplhcoobB5WWmU4k0g5S++sPxZOdkdHx6UHZdSezM4mMjXUeQ6LLSaXtmJ0M2ysmV6STk3bdKfyE
-6+iBGapNJ0+weqsvronwsiU8IDu5rK5+NBpJpbjV+tF4LB1xYqnwsnFnbMyOQUsnR6PxlN0nsuG6
-VqOiplNv2vREfCwS/fNa7mbRWQ1H46MRnkX9eCQ1vnTpjCxUvmxJw7KLcZfVnRxHX/HkifqRyOgR
-d6OnIAu9Qp2nDK9RVIa4Y0nditAYdlBsMpSIJO3QZCyUspPH7OT05q4ntYIUntjeDZGE0zBhk2oi
-X3N9Y30zqfXkwd4m1UY5bU7MSW+kBW1pJx21N4aHr27bf2ldW4POkrWxlfLbd2/bfKAF/6iofSxp
-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
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgPAAAAAAAArwUAAAAAAAAahwlxpwUA
-AKMFAABlAwAALAAAACgAAAADAQAAIAAAAKj2S6XX+0XomnAUblstpTSjvNnuIjfwYUMxrxj+xAXy
-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
-giNvVWPMUxD1LTpu6uWbD0W08vWP1oEJdsZJ7hkh/IWHd4rXpeI3+13kxLdlbg31VdFBZmKA7j5v
-IXwZdYHZJLJxhRyzPmwmMclGJDdStm4p+gLHaxFiB3idpptrF0B4JBktQ1kOWE/V28tVbwfp7eUC
-AwEAAWoEAAAAAAAAd2VyQgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAD4DwAAAAAAAEFQSyBTaWcgQmxvY2sgNDJQSwECFwMUAAIACAAAECEA8ryCCz4EAAAkDAAAEwAA
-AAAAAAAAACAAtoEAAAAAQW5kcm9pZE1hbmlmZXN0LnhtbFBLAQIXAxQAAgAIAAAQIQDHLoej/woA
-APgYAAARAAAAAAAAAAAAIAC2gW8EAABhc3NldHMvc2V0dXAuaHRtbFBLAQIXAxQAAAAAAAAQIQAy
-hZBNKQkAACkJAAAiAAAAAAAAAAAAIAC2gZ0PAAByZXMvbWlwbWFwLWhkcGktdjQvaWNfbGF1bmNo
-ZXIucG5nUEsBAhcDFAAAAAAAABAhAOKGTB7rBQAA6wUAACIAAAAAAAAAAAAgALaBCRkAAHJlcy9t
-aXBtYXAtbWRwaS12NC9pY19sYXVuY2hlci5wbmdQSwECFwMUAAAAAAAAECEA7Zj7GbEMAACxDAAA
-IwAAAAAAAAAAACAAtoE3HwAAcmVzL21pcG1hcC14aGRwaS12NC9pY19sYXVuY2hlci5wbmdQSwEC
-FwMUAAAAAAAAECEA4FHRL/ETAADxEwAAJAAAAAAAAAAAACAAtoEpLAAAcmVzL21pcG1hcC14eGhk
-cGktdjQvaWNfbGF1bmNoZXIucG5nUEsBAhcDFAAAAAAAABAhACScJfbIGgAAyBoAACUAAAAAAAAA
-AAAgALaBXUAAAHJlcy9taXBtYXAteHh4aGRwaS12NC9pY19sYXVuY2hlci5wbmdQSwECFwMUAAAA
-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
+UEsDBBQACAgIAMNkbF0AAAAAAAAAAAAAAAAUAAAATUVUQS1JTkYvTUFOSUZFU1QuTUaNkN2OmkAA
+Ru9NfAcv2xBBRtwFk73QFVhE/ooIctOMMPzJADKAwNM3bZp0m91NfIFzvvNpsEgjRJr5CdUkLYv1
+jKUX08lrjWCDwvl2WM8ASy9oFtDs7JtzaYum/T6dTCc6xGg9qxFhcFphWM1xWKXzjmPS4GcO2yJI
+UE1XRTyd2G+bOVg9zXdpjEiznjnSMgLufjixe88/dG0pUfEpFc9JTqS6ylbNFbOMej7K0vnln2lT
+hHWZhtrfvXSP84/ofQNY574RxnDbSyNEotrur9e3orEzN/ERbwzyKKMKM2P88mlEnzxa0VDPT5Sp
+3YHNsIaHV/m1uA0uf4ragffEyNi6Cwyv/XjE3P+qsq0DRGhYk+AjVeltXpaktGjdvb2oDK/jRVjh
+qBcqHi9ffU4NfCqvAxHe31GDHBKCCB2i/iOSEu86XHllNhhLW7D9YpVtBAzYV9OtGotLHNmNn8Xs
+WOv8O+RvYEMYgpq2opPms7P9zlMB62mUnqjgICrCyjma7slS8bhVpCd48Qztku2h7DlfnP342zmI
+FMXKQs/Tt8IwcJxd1LbTET3egOeRq6zU4tibnhk77XPXw6aLUu5qEywTn2oCtTs49a6Mo6CDTD6U
+gmguLPGmZTehNcSvqh7PMvpCADorKAkGZmG6xg1ZaDzeTwAnoS29bX6cJSIvEDOSP7JfUEsHCP1o
+eIsCAgAArgMAAFBLAwQUAAgICADDZGxdAAAAAAAAAAAAAAAAFAAAAE1FVEEtSU5GL0NJTkVWRVJT
+LlNGjZHbjppQGEbvTXwHL9sQTiqgJnMhiko5KCcVbhrYbGUjhy0bEHn6pk2aTDsziS+w1r++30HX
+IqybCtJHWBFUFosRz3DDwaqCYQ1jWn4uRmOe4Rh+zPCjb17UFHXzfThwdkt6LIj0Gl0hqWkjLNAF
+knoxkk84Pvq6VazayDWMi6PPzurcEYX7Le1QEj0oL+s4MgeU9fYlhjZCVNDLuq5Q1NSQLEZ+eNf3
+bXfAruluDiwLD897vELnq3WrG2ozHIwiN4/OeSBySQTehoPhwAxzuBhVkLA5wnmI6TzGiG6nLAI/
+s7ApQAIrBhfX/69YjIAvNODMnfY+sDTJ1ZWuTqAvKuv1JcCyyXP4cBOhpcFl+c60LOKqRPHfBqbL
+s49oypVL2wUm2zWsCXSQ9ZMnce4wEZYdVFe7fZG2yg78OITK5xFd8mpFsLHiVO4NbkJt3CbiK+jI
+OXSshz27NFkgKlidz5yWm829f1VlUwFImLAi4CO1l/M0ocqqkIiHl/Eh6K+9idH0RyqJ08Oa11QO
+PDf75dp7vw3IQkIgYWLYfUSqQjvjstPOX3mS7eYnicdga811WxdwNzEtTQsjVvC06Wn2DvkbWBOW
+wLrBTFJ/NrZ5WInbRsKnfJ3cpNNTLpF/pfYqb9octrBqlGddTuZ2Dowvxn597eUK23YgP8W2pUK3
+E+5k49eFV0yOEpGV0AqELtpFd8im1ueu1//apOIpKPO+TTjB3vrEEnqw9Rx3q7TcJO1dSi2mvKwo
+3OOrqtezkI58aSwbG23dPHxP6GFdPY6hsYtTNwiSZqplPTr3ZMtxf2S/AFBLBwgCk2P6YgIAAFAE
+AABQSwMEFAAICAgAw2RsXQAAAAAAAAAAAAAAABUAAABNRVRBLUlORi9DSU5FVkVSUy5SU0EzaGIT
+YOPUavNo+87LyM60oImN0aCJ9S8TI6MhvwEvG2dCmwdjKjMLEyMrgwE3QiHjgibmfoMm5m6DJqbi
+BcxMjExMHGIX9pz32Li4GaQNqo6Rh5XBoNiQ24CTjTmUhU2YKcjfUMCAD8ThEGYPys9NzMtMhImw
+I0REDYRBIlzCPH6pJcElRamJuZl56TBhbjRhIQMBkDCzMKdzZl5qWGpRcaqBgjivkZmhoaGRoYGx
+kYlRlAS/kYGpiYGxsQFUYGCc1cSohBw8jKwMzE2M/AwGTYxcTE2MjAznprRcva43f7FB80G2AoWp
+qYVG+p94inKfnqvWS9xl7Fow73dFRnnT9bnJV7zNuh/t0e570sFp9qLoUyavnPCcCr/WjYfvqgj/
+23zoxslnh9bXtbR8PnRJhG/7G9E/UZVzD7cUh9m4rr1SM/u48EONqi6v7oBZFzac/CdoYvb0+MW6
+58Kmb8OuyLxaNFXpmJy15JWAEqVcUxk3draLgbMDTyxjD2I49fpL6rRlod99Cro/mfksEA3Pq3zR
+m+6QkaJ1dVudb+62NRMF+EOdty28LHhtoW9N+7fgJ4XG81hfMhkc/OYvw2Qcxyh+ovRd6/Pvh2Ku
+6x1Y3n/ut41WacXEL12rLy1QNLjhIafJmczEzMjAuFjRQN5Alo05VJaPRYxFxGvd3PhJDkZOkauP
+C7bd/f76tPGKNWhpjBkUdhu2+C4U+rutqkN6Wn3le92J266dX642wfyfxA0BToulK1s/yV1kaQgR
+0XO3um7uf829IznkUNo9L97rOoZeDXWLVPdtvetoeydA4WDVc/d28y+xiddsPqn5nRabM2fJPwbv
+reorvrk2fEn+3SX0X0J5+anP7iFaV2MmqVydfOqo0lHX8w5H3W8bMvrdMBO9J75GxXdHwu6qdaKu
+7+9WBJzSdPSasyQ4pTlK4u2zm8WbuGZI9z29IKDlMIVhBmPcpkPMs68dzlufYigj/ne7ljor32UX
+34Dtf0vDDSetz07dn2+QoHTwSb1e1E+N1bcf/oxm8Z22/+r1ohcPTtfJaW/IjZw43Vgz5+fuYqcp
+ioZNTK4GTUyOTIyMBvUDkrxRywCkomNB4wwDCXiMcTIbIhclBjIIGVZDfqSMa2FgHmWgi5A1MVQw
+kEMzeiFSSuBmZTDQRyhnMVRiUdijrab57VPpullGbpP3/GwyCHWPrFBUsvp5e5Vs8fxQFRUDVP0s
+TYwMAuXXpt776qG1k/u3XGjVuUj/g5cL3k6te9LG66XAL2Sdx9X1do/pw+XTTY7v+q5fdG7O+lK2
+B7MKvNZp9hbvd+19OZd3tufyW/nfDurIflv/OWPdCocHFm/8sp/W5LV/EXwnun1TYvHV+3531mj4
+WzFOPXDg2PwjOoZ1ztKr26SK7hfpef3qOrlYWHG61F+XFdXsE56skrh3WiziSsOD4rnceTtFGbge
+T064Wu7b+1MltIlJyjtIRtDss37+5pP14nY/5qt1rpX5tKwkZobb9sdcJ6vz127oM2tfEGb2i+ej
+ncI2qwPd+8KkpnwrfDahNmTecqNnwuezux34JgqES+rImJ7g7TOXienZ2WgDAFBLBwjl1d5JpgQA
+ABQGAABQSwMEFAAICAgAumRsXQAAAAAAAAAAAAAAABMAAABBbmRyb2lkTWFuaWZlc3QueG1sjZXB
+U1tVFMZ/570E0wKSUmhpSQEptgL6UHQcx4VjmmEsmuIMoHWHMXmBDJCk5AXQTTsuHBeOS1cuXPoH
+dOnCcek4XejGtSsXLhz/AZx7ch+5PGDI2yTvu+d833fPOfc+nwwzAyDk+KYPXqb7/Ob8vwm8AawC
++8CXwA/AU+AX4BnwNzAs8I5AUeBTgUOB7wR+FvhdYM6DwIN3PYg8+NGDnzz4zwN8yPhwzYc5H4o+
+fOXDnz4EKXg/BYcpeJqCZyn4KwWkYSINQRqqafgiDf3sE7JHixoN6hRoUCHk9MoKJXZ1ZZBdatRZ
+o8I2H5+IgiwRJfbYJCQ6JyZF/QRbicNzIjPsEfKINjX9V9Ft7FDiM0J2lKtG2Ub3U2KHHRoccI8S
+ZbZp0wSusqWuKhzob0ieMmXlMIolIss+QpsWIS0KumaizdohEesaWaWqmsZJxBah3UlGo5o0bIZh
+u6xe29Qps8WD4+oOWs+GaZOCuqtrzVrq9kArXNGdrNGgSsQydZq0iRye5zSvwh4Naqo4xxYREU3e
+ZoEFWqocapVbBIn4QH3sskCJJtssaG1a+n6SF1Vr2qqW1CuM0dQdRlR137vc017tUEn0sjtZved0
+Zy6j/uvUqKq/CLhBSJuAuk6awfa0X53p3NS91XQ1nuRQe7ZIwKsELAIei7yu6JsWfU3V4hl4hZbO
+JQw5WFP5jE7LmdXxU7U9Ky5gmRXWWWKVFZZYB+72mJmnQIEl1lhjw2Y/5ENW+YAN1lgnr8ww2yPj
+Q1ZZ1pwNlvjk2FeeomU07HneU9YBpwZVrXVEW6sOo6cUkycu0Kk2Ew+5HqIjGrR1es0MGyw8PuVN
+nSFzCo2H7m1hptO871Mj4nM9aQEPKOkk5M9YNXikzJHuysxhpLWCvmO+Dv/NU67d7OBEtFHNa6+N
+r7K9YTZ14o3y1AVcyYyAInk+YoUC97VL5nkiGYpm9jyRnCcy4Ik0PREfkUeeyLeeiCDiIfLEE/nD
+E/knJQIiWURuITKJyLxnwrKM6ZmAo6OjoyvmG2XeJcvXDm6e63pTjphPij7D9tesZSD7q8VEz6mp
+AP4Nuz6id0AHG7PYqP1umtzrFrumZ6oTN259FLUrXR8568NzfHiOj1GL+Q42bd7tXpNcRuMtvem6
++C2rIY6G+ZxOWG8TDl8yL+bL9MA3afkmHb5kXlyDS2fweQm+Kcs3ZbG0U4Oco5HkijUuO/gL52hM
+W41pi/V1NXQkYo0kV6zR34PGbatx+wKNJJfR+F5vrS4+YzX6HI2BLp8Eni/DTh8zOsKpx8NOLzqY
+p9glx4v5HXb26mL9CSz2dtXx9uIF3iD9OK7JHVuTOzZu8AzN551+ezZuqItd+Xeog2UdLGvrNmPP
+Y+ztrvUWP/FcjzsxL50z17PW66zTq2RezJdz8Llz+OYt37zDl8yL8VuJPcT4RKLuMT6ZmJUYn0rc
+fZLA47vyf1BLBwjyvIILRQQAACQMAABQSwMEFAAICAgAumRsXQAAAAAAAAAAAAAAABEAAABhc3Nl
+dHMvc2V0dXAuaHRtbJVZT2/byBW/61NMxtmEbCiKlC3FIUVtgzRAU+ymQdzdolgs4BH5KM2anOHO
+DGUpMoEFDPTWU3speuitx7320Fs3h/0c+wn6EYoZkhIp210Uhq3h8L0378/v/Rl59ijhsdoWgFYq
+z+aDmf5AGWHLCAuO9QaQZD6Y5aAIildESFARLlU6PMftNiM5RHhN4brgQmEUc6aAqQhf00StogTW
+NIaheXAoo4qSbChjkkHkOy3XMKUqivkahBarqMpg/ooy+BKEBLTYoregLpQAklO2nI1qgsFMqq3+
+/MVuwTdDST9QtgwWXCQghgu+CXMilpQFXliQJNHvvGqgLXQWPNnuVkCXKxX4nvdJuCDx1VLwkiXB
+iZf447EXxjzjIjhJ0zRMOVPDlOQ02wb4ApYc0BdvsPOeL7jizktBSeZIwuRQgqBpOLyGxRVVQ8Mm
+c87VSh9OmDadEglJNTAaJFQWGdkGaQabkGR0yYZUQS6DGJgCEX5TSkXT7bDxaLvdWuNPi01Xc0ES
+7dul/gSmLMgyWkhARCHFC+fET8YwiZH3idPYiCYTvZ54z70EaT/Y1cBd8M2uK3S5INYLxz91xhPH
+PZ/YYe3gwC82SPKMJsiQjCcTp/11vam91/LMKzZofK5VrSOj1StloHcMKIKcMmsy9oqN8+Jsfa0P
+2AzliiT8OvCQr9mNDHOM5+gfd2o0FYQleydSllEGQ+NL/WeYUAGxopwFMc/KnIXmfRv1BhzDBVeK
+58GpV2yqgZvxJd81kYeJ98I/q4N/XXO98Lz6WdIPYCwLM1AKxFAWJNbWupNi08PLm7wgsXKwQQl6
+S4Tg17iLFiUIkykXeWCS4g+W7/rGuu3ucJTv3z1q7J4Vmxami1P90xqleBHsFWl0n3pegzEJWWow
+NwSWhAo2anhQoiwKEDGRUA1WfkeDsQZb32fn2mWFmwFJWp8RQjoO8rWCPa+7kyMZ47EWkpEFZF1z
+TzuWLRZhG+NFxuOrIwlTLYCyolS7Gk4mofc5MunnyMn4/HR8Ru6C+OTsTOfBEUg7Ht4XglrDw7FB
+yuNS7niptKkB4wxaKQdWHVDFdn1D7tP3bJ8owX3KdCP6vIdGUw3iUkgugoJTUyk6cPDPjoBJ2QoE
+VdXAFZB0M74Ffkd5TRKsdHnuEaZn3tQfVwN3Kch2d4+XuyI0zT0yTqdn/iSu3RMkVJJFBsmOa4yr
+beBOW5MSSEmZaXVzudzllLWY0oWjZ+i4NfQhDJ5VAxeE2Of5+fPYO61cftXunE2T0+mLauCmWsfd
+sRd7Zfv+UrMkRZ0etQi0KJXirGe4/3zsnU7vAWLtkf8NxD1cxsUGGaVMGpv8DjJI1TESjhxyPxC6
+urah6gG5QUYv0sSfjL09s8xJlrV+PD8/vz91tStN4ruyoOy4hPeSQ2vbRq6TG+OHElfx4ljbniMn
+3ichYTQnJlwS+RLpQ4lAlKV6PIFwDULRmGSNO4fjA8BEXUq16r+8gm0qSA4SyZ3iu0MJFVwRBdbp
+1EtgaVfGN1x1YWSKaaPldDrtRmfcj2Xd8quBy9N0d9fv98BnQvx0DEdW6/N6JaZfQ/3zn8uZSTWY
+jZpxazZqpkI9xMwHs4SuUZwRKSO84Bs8HyDU29NtGs9nsiCs3dN9Fs9fvXn7+svX7y9ez0b6ZZ9k
+scXzO4NfTTZK6Hp/Ck0izNNUq4tbXp6mGBltI9yCS9dl3OFd+YbVjJJ4/ooziBWQDx9vhwpQRpAE
+sQYxG618Q17sVQeSYMNqVvM3TAmelIgkAmTLVmYlRerjbYn2U6yDEkCwgbzISjRbzFdKFcFo5L8Y
+u/703PVd3wvOTz1vNlrMkSQlSngOjJaZkePORoXRw7RKlHIR4VJkeP7y+NjZyJAYYtOfjK6aFhUZ
+iWHFswREhB86HyNSKm56GpIFZFm8gvgqwinJJNTBrSvEPlCKIQGNT0xYD76cjWraB9h0T6j5BCix
+fSBmP/3xX+g9/PA9i4GI+P8QKmPC8Pw/f//Ln9ArUqqPt42bAP3wvdb5x78BKQnKeEyyI7Ed/OZy
+WYvTiyPwNSSm9tVE9fIhMq5aKq5w54ZTAFOiRL+nLOHXsmFuP2QsaKHmg9EIkYQUiosAFSVToO9e
+iq4JeskSwWmCrL3El0Vho+EckRgyIil6+e4NigkqoD1jQFPr2izdLtOTJ4+a3Xj9K5BXihf2LuZM
+Kq1jEu0qPYYiFnnhAKE96atFZNHE+UZyZkfzhiGNNMtXNPk6TCADZcysn2lqpXZq/ebit2/dQt8q
+LcNqV1pqzR2TLIus3CF2NGdwjd4JnlMJltjLp0n07BkLW6GRCLuWuFqA5r+5wdihiV3ZPZUb66Ld
+ElRg2dHc0OMlKGw7CqQKynZPP2GntB0NqA6twZftxJxpwB/omw3DYoDd4amBbldhNaiteBzJaJ7w
+uMyBKffbEsT2AjKIFReWtMOGCmSs6S6UoGxpyU8/xdh2BZiMtkZfPZnN8dOvR0snjubWDj/BAX5C
+8iLEDp7pdab0cq6XS718ip8G+Mm3JTf7T/X+yemLEFdfxV/bdjjQMX4Xabd/8f6zC512q3dEkFxa
+Oll063Sl2bWdnCcQvXOXoCys19h26ixrN+snbOs4tObkchlZyokzGWGsEfPYwic6v2zX5Mpb851C
+LpcIP4szGR5eU8ZA/Pp3n38WqSocHEfTnGi7agXMiqP5boCQZjXpZru6r75qvp24vJN8j3exW2RE
+6R5+c4ObPMEV+vc/0Vq/XIOQlLPqUuOIplbsanvtnfFA/RA2psduvbi5qT+rJopCfC6XUazHz5ub
+xj8g9s6ptdW12nbXJCshasUcBGo6nbzm1OjQ++zW2P2Ga6qp2xTTCJu5an/Kgezg0svZYn7RdBLE
+SiQ+3sqiZAnopjRbiPnjHcjYqlWxK71T9+ymbh9ugbghrS3WWtsV+um7P6O1vvTS+OMtSki8r8hl
+hgAVXDCq0I9/pboEQKyI0o24rtNu0/wvW/3rxt0PKn5bovzjLSq4akVggx3Tqu84xLQX877Jyoc9
+NhohAZTF+m4swLTInCii9fM9JCHWXhogVBdHX399pAOuIgnqjR7h1iSzdBXYseGwd2QPlMetDlmP
+d6yS9qWumGwWefYuzoCIvUhlh3dywEi27KpyfM/z7HBQdfESrwhbarg86MSLeEXzRSc2uBro4knk
+lsUoLZm56qCmylmlyAz2SpFF+uHm5gjEtqsEzS1b2/BIUwtQpWC6CFj4IhYU7g5PLnbqxGjDveTY
+dtv7YaRECaHmf9qbGfVtQvdeg5TPP942IIAPP333j6f2obeIiFwTqu40A7dr0/0nmzGoKQCPhMuv
+bK2GhrrQWc2F3SoOmYTaxlcdNONnNa3+1tR2ML/CJkD7gziLMxpfRaZjNNrY4eDgUpIkr9fA1GdU
+KmAgLHwF24RfM+xANN/R1AL3CrY61K81SrC9F1M1glrodc96CEU1R93p9gwGCQbNjY+a9/341JVX
+j0PdGoPxzwVOz2r3TmjI0t8Vl4JmgPSo6qDzsfnr2UcBzqhUD8VY62rto3useS++WoybAVuqVQ+0
+b4ckR8uPt5IqxGhMS9ZA9zDudwxwUQ/kOWElyXoA10IvX+5FPt51Dq76j1EU+Z+2PTVoFoCr4LIF
+U9vyjh1vhOSksGQ0v2zn5oQoMiwj3BR2VwO/wvPZoi31NVAr0wDM5X7eI52N6s398Hxpu99wyixc
+q3L/YPNST0In3a8bsO2mXLwm8cpaRPNFD5q746a4cLXaEpRbhi24O3sG51WoL6zN5DwbNVfVUf1/
+jv8CUEsHCMcuh6MYCwAA+BgAAFBLAwQKAAAIAAC6ZGxdMoWQTSkJAAApCQAAIgAAAHJlcy9taXBt
+YXAtaGRwaS12NC9pY19sYXVuY2hlci5wbmeJUE5HDQoaCgAAAA1JSERSAAAASAAAAEgIBgAAAFXt
+s0cAAAjwSURBVHja7ZxbjF1VGcd/31p7n3PmzDCd0jNDdSptHwAD3pCAiJe0PDTGSFDxhg/YGIiG
+amLQ6GNLguEumFiiUGNBri2BUEGQYKrRBwyXgNiKDwq9UNoy0zK9nNvea30+rL07p9M2pU1nZp8Z
+VnKSyZnJ2Wf/5vuv9V/f/tYnnPyQlSCrgPUgFHB8HXQVsApUQCf9ggqiYDdCRJcNBZu9TuifKSdy
+AQHX+d6u6uB8L2kt8qaSFAxIDDhjW33qR3rrIzs7I+ho93LSgFaCyUN0Hdgl1doyhctT5RIPi4DT
+YqYifk9Q/0AKKHpAkK0x8rzBb9jbGH3mbGhloIyAP2lAnaR3VU6/SsT82Ip8rIcQq16VFPDF4wOA
+AYkAI4IHGgKJ6uuK3jm/MXo3oMeLJjkenDfKcxb1mvg3ZZFloiCqfrfgX7GYTQbZZpA6xZulFegB
+hj16nkfPd/j5iqiIRaCl/O2Ac99b3N7z740QLQ0B994A5XC2VGqf6xXWxyJniNf0TYO5N8Y8HcEW
+A+3sAyT7QlIgOPl30mw+WuBhWQrLE/zZHu+NRInqWFO48kP1kaePBemIe1oH9hvgtlQGP9sr+idF
+qpFq+mBMdHMJdhjoVShT0LX9GMDawAGBQYXr2vDdNs6JWIOm+4XLF9dH/ng0ucmEDzKAvlWZuyAW
++7JBalbVrSpjV5egPwPjKOikc5zJ1mag3hVYnsBNTTyCCBxsO71wuD36+sSJ2xzlgxSxaysitUg1
+XVXG/qoENQ3mJ+1COHkUpRmkIYW1Mfy0gjGKj0X61Mj92S3S6ZUOAdoIkYB/qzLv2/0il4oPslpd
+CmHpuhTMsUANKdwXwz0lrPGazjFywY6e078v4P8SOB4uMQV5CaKhnto/B5Bz3hTVL/Vg9kvAOhPg
+TJSczyJqQwN/rkfGlB1R054zn131XE2mY9XSD1QHL+0V+TCqujbG7DBhzplpcOhY3fYKrIkxKL7f
+yLCruMsENI8i0xlJ6v0VVUXfEfzTUVitHDN3OKBP4TkL2wxaUhT0CoAlWVzkgJyC8XCJAXnFYrbO
+4OjpjKISsNPACxZjFEmFT70BFQlMxKwMy5ru6h0a9MIir8omg7S7yOecikh6zSApiiAfrJYHF+TK
+Mquyn9rtZMgivSmwTWYPnFxG2wVJQHvAIukZZHkukye7oshUomzjWQ/madYMAerBHaoVIVWpZgm3
+w4yinnCSaIZB6gChx3TSU2H3u01+UwanDeyTAMm8D+jwixzINohfTWBEoEl3JLbNVEVPApzl4b4m
+3NWEYYXRTPj2fYkFSA2Bg8A3E3iyDivawYPkspPZDCi/mAH2CFSBG1rwWAM+n4Y9UbuAspuWuTLK
+3OuowMcdPNiEO5shBTEqxVrtpm0xkQzUQYE6cFUCT9XhmiREUp5mkdkKaKLsRgX6gVuasL4BF7vw
+XjLNsiuMHcnTuaMCFzp4pAG3NmFuh+zMbAbUKbv9Eh59Xp3AUw34ThJ808FpkF0hDW2+5I8KzFO4
+owkPN+CTLpjMdAplV2jHH2UGc6/AZxw82oAbW3BaBs9MwQ0UfkuUL/n7ssi5th1M5pVJkNxky65b
+9oyHfNGIwHyF1U14oAEfzWTnJsk7dQ2gTtm1M9ktTYMTv74V8uejk5AJ7TpAnbIby6qiftCGZ+vB
+bKanWG5dCagTlCdA6tPwmGoyIrbrhmZ7uX4FJ3B/DLeXYKuB0/XUPqrqOkApYb4ZUPiHhRvL8Fcb
+oqc2CQ86uwZQXo8yT+FtgZ+X4fcxtDIz6Zicp8BRt8jptEw3D8TwixL814R9WlmPUTs3GwA5QoHB
+gMJLFm4qwZ8j6MnklDL5tQNRkeU0V4MJvK0Mv4tDynauht+nU/RdoiLKqQ8wCo/GcFsJ/mNCFPVP
+Q7VJVCQ5RVnUvGrg5go8E4U5ZqrkVEhAudEb0FBceUMZ1sQhJzSg4yVz07m1mVY59QKRwoYIbi3D
+JgNzNLyKULwVTbecNhm4pQJPRhB3mL2iVLZF0xE1czSsSLeU4NelIK0iyGlaAWm2RehXeCgze6/Y
+AGugwLWQ0VTBiYDtAtf2wG9jKBVQTtMGyGdbhbszszeg4xvPoo8plZilOKvTex1TnjDrtrrrTkCd
+xxJm3dDDQRx5mMUZ23LhDelRVGcZnJ7sLJhTBTHNQ4A2ZfCc+ncStBERqr9mEyAf7lljMA3w6tmV
+szPXZ9mFhfWR3QbZYkQ4z6PxLJKaAc71YRFRZadvV7YdAgSHzoo5gz7vCQdgF/jxM6kzdeS1k0Me
+LnJ4FVELL5zJ9kZ+AsrA+MkWgceagsxXZFkaHuvaGQzIEqpvlzhY5KEtiOAf71y08knaK8hwY/TZ
+/er/pyJmeYKv6cyNorzxQJ/CNQleBDPm/e5KlcezX7tDgPIDZAItK3KjCHK2x1/XDhvJmRhFEeFR
+9YoEPuHwRkQs3F7bs2ffxkxecJRTz+tBLqnU/t5n5GLvNf1JhWhtHAosZ8K51bxIa7fAV1K4q4mL
+RexBr5uTZu8Fi9jSpqNbzBGABPzuUu0stbwk0IeiP6tg7o1D/iamu4+F52V+X0vhl018VjqTtoVP
+D9dHXp54LFyOYpqsgNtaHvxC1egfPBJZVXd3CXtHKVRV9Gk4qddNI8km5D4NsvphC6eCiUVkv9dv
+LWyOPHLcxgL5yNs0bKvWvlhRHopE+q3XdLPBrClhnrPhGGPmvAs7iWtmAg1hiliSwtUJer7DpSKR
+Q1sNZfmZzZGH33NriomQtvbO/UjF2Xt6jLlYVUHVbTXwokVeM8h2QepZOZwWSE4KVBhvbnKhQxd5
+EBErIjTVv9pArzmzMfrCCTc3mSi3dWCX9NRWKPyoLLK4nLUmcKokoAVuj0MMxgIqQlug6XU7yOrN
+zeqdS9nSPOn2OBMnboB/Mdg3VNHLvMiXU/QihQVlJLIF1ZhTaKEO2BEpL8bIE/vL7ScWj429O/He
+ThpQ/nfZh7lxcAsrY+X6gpYwpOqqRUy2i9imeN2dtOPtw7xd71QG4E9547e8yZt2oXdclzWnm7Qm
+b0eDxfir6Omek24T+H9ES7GR1cV9oAAAAABJRU5ErkJgglBLAwQKAAAIAAC6ZGxd4oZMHusFAADr
+BQAAIgAAAHJlcy9taXBtYXAtbWRwaS12NC9pY19sYXVuY2hlci5wbmeJUE5HDQoaCgAAAA1JSERS
+AAAAMAAAADAIAwAAAGDcCbUAAAKXUExURQAAAP8AAP8AAKoAAP8AANQKFdUNFNANFMoNE8wKFAAA
+ANsKFOgIFPEIFPQIE/QIFPQIE/MIFOgKFN0JEtcAE+UKFPUJFOYJFMYODtoJEuoJFK4MFEMRFBMU
+FAYVFAUVFBEUFD4RFKkMFOsJFNkHFukAFeUJFHUOFG0PFOcJE+EPD38AAP8AAN8KFHUPFGwPFOAJ
+FNgLFvQJFLAMFAgVFKUMFNYJEuEIEjkSFPgJFeMJE78AAFUAAO4IFA8UFO8JFKoAKsEKFPIIFPMI
+FMgPF38OFNQKFcQJE/IIFMoPFu4IEw4UFO8JFLYAJOIKFDYSFPYJFeQJFNcKFKoMFJ8MFNkIFN8J
+FGMPFOAIFN8PD+cJE+kJFNwLF+wJFKUMFJ8MFOwJFNkGEskNDeUJFOcJFdgIFekJFfMJFPUIFPUI
+FPMJFOsJFN8HE38AANcHF9kKFdgHF/QIFP0JFc0LFZ8NFIoOFJ4NFMsLFfsJFfcJFf8JFv4JFQgV
+FAkVFBQUFBcUFAoVFAcVFP8JFQEVFBYUFBUUFAYVFPgJFfwJFQsVFMQLFZQNFAQVFPkIFA4UFIEO
+FE0RFAMVFBAUFBgUFLILFPcIFI8OFCETFAUVFKcMFPAIFPEIFNYKFGUQFA0UFKkMFN4JFOkJFPMI
+FLULFD0SFBEUFOIJFOQJFIsOFB0UFOUJFNIKFF8QFOEJFOoJFLAMFDgSFBIUFOcJFIUOFBoUFPUI
+FM4KFFkQFAsUFO8IFA8UFOgJFL8LFDwSFNUKFGMQFI8NFCAUFLgLFEASFOMJFNgKFGkPFO4IFO0J
+FJUNFCMTFL0LFEURFNwJFG4PFLEMFPoIFJgNFCcTFA4VFIgOFFYQFJMNFMELFfoJFfYJFPkJFYAO
+FH8OFBWmpQwAAABxdFJOUwACBAMBGCUmJxkBMpLU9P711pY2DZj9nxIcz/77/f7+/fv91iIM0vr6
+2hECA5n6+qUu/vz+/DiU+/6gBAPX/eAGGfb8If4wGvci2f3iB5j7/qQz/Pw9ofqtENngFtf9/d4p
+E6OqPJ3d+vvfoUAGIC8h5EArWwAAApJJREFUSMdjYIAARiYGvICJGYXLAuKysrFzYAXs7JxcQCNZ
+EOoZGRi4eXj5+AtxAQFBIWGwMph6EVGxouKSUpygrLyiUlwCpoORQVKqSlpGVk4eJ5BTUFSqUlaB
+6GBhVFWrVq+pravHA+oaGjUqNLUYtYEadBh0m/SaW+rr8IL6+mb9JgMGYOAwMxgaGZu0tNYRAK31
+babtZkDjmRjMO2Rq6+sIgvpOC0srBmsGBhvbYtk6YkCrXZe9A9APjk4lcvXEaKiX73Z2AWrgKCyV
+J05Dj2uvGzYNrS2kaWjta6hvJUFDa1//hImTJhOvoaV2ytRp02dgcRcuDQ0zZ82eM3de5+RWYjXM
+n71g4aLFS2YsnUy0hmXLl81auGJlW0sLsRpWrVq2qnD1mk4Ud+HXsGrV2nWL1m/o2VhPtIZVy5fN
+3rR5C8JdBDWA3LV12/bGHa1Ea1i1fO26nYs37GolWsOqtbtn79nbR7SGZcsL9+1v6Gwh1tNrd647
+cHAG0Z5eu7Dw0OEZSMkQv4YjywuPHutrIDbilq89fuLkqRmt9cQmvt2Fp8+0TSI28c3cOevsuUm1
+9cQm79rzFy5emlFXT3QWvXzlas+uyaQUArtq61tIK2bqSSyXCBVk7h5lxBaV15w9gRqYvcoViCuM
+va/7+ALrUwa/G4oNRFjRssM/IBBY3DMzBN0MbqwnWKHUTZ4RciMUWKEAUViTRnM9ATtaJjeHN0WA
+qixgpRgZVaHf1tmKr1Js7ZwRXhkdA64UgXWpSmxVnIWd/IweHGCGvLd/fFNCIqKiTkq+daur+7Yr
+DnDn2vXKihRW5KYAQ2paekYvTpCZlZ2D1HQA+YOBITcv3w0HyC/wRW2cgKLPGn/zR0cHygAAqumo
+OrFhXbsAAAAASUVORK5CYIJQSwMECgAACAAAumRsXe2Y+xmxDAAAsQwAACMAAAByZXMvbWlwbWFw
+LXhoZHBpLXY0L2ljX2xhdW5jaGVyLnBuZ4lQTkcNChoKAAAADUlIRFIAAABgAAAAYAgGAAAA4ph3
+OAAADHhJREFUeNrtnWuMXVUVx39rn3NfM9O503n0bSUxKEFMRCXqBxWMYNBEiApKokGjxoABYlQC
+PkKJGChVIgES8AWa+KBQLZEiiqb4QTSiBkJjVJQIrUA7M+087+ucs5cf1rmd2yczZZjeOffuZJKZ
+m/Tc0/Vf+78ee6+1oLtO6pLFfqDaM+WVePZJXgqozP3eNm8lCsFOCDtFa5v/X10EJZOX8RIOEIGk
+9fOpvjUjkdZXJUkwlKiGcQYEHoKXMBgX1dFVldG90rIDFIJ0Z/glASBF3TUF/2y5vLK3kX93Inqe
+97xVhVMEynkkUxxUR1GYdvCcg8dF9ZE4CH+7dnbvvhYgvCyQnmShWt9Eem9h5DXO+csT5ZIe59YK
+UAMaqnh7sM8Y7TgH5EQopoKrqo455f4oSO5YO3tgVxOIw1lhUQDYCeE5EO9kpO/0EtcG6JUlcX1T
+6okgKYEW1GgpEqROdhAQoAjkFBXQOviKIAEEZRGqqg2Uu0Zz9etPn54eb8pq0QBoPnB3afBtRdz3
++sS9flw9CnG/EniQpx38OYBdATwnML4QNWjz5YBBhQ0KZ3g4K4HTvAEyJSQewmERKqr/rXv57Pr6
+6G/muxNkvsLfUxj5ZNHpXQ7JTaFxvxLEgvwqhPtC+EsA+9OnBUCg2fFDFUhSaSpQVjgzgQ/F8IEY
+ehSdEJJeJAyAivovbqiNf2s+IMhLfHEoEO8uDV+1UuTbk6qagB9Ugj8EcGMB/hiYhvTonB+qZHM1
+hZUAFYEIeFMC1zTgPTFMCF6AIRE3pv6GV1XHv9aU4YIBaKL3bGHwE0NBcPekauwh6FPktjx8Mw+x
+wAqde6lOWi79mU69jc81DIgGqId4WCS3z/urN9bGtxzPJsjxvJ3nS0NvySN/jEBicH2KfKkIP8jB
+UBoIdJrgjwYEwJjAB2O4owYJqELSJxJOwvkbK6MPH4uO3DH8fP7H2h7gxw4JGyBN4d+dg1UdqvVH
+Wz79Wa2wPYTLixBadsDVVTXn/T3P960ZAfS6o8jbHQ1UAa+lxldWinvtFBoPKe62vGn+iNpe0q7s
+D1kRJpufh/CNPJQVV4Gk7NzqKIk2C/hNR2EcOUp6QV8oDmx0Ev4jgXxJkb8EyIdLUMi4kV2MFQCT
+AvdU4fwYpoSkAE5F3rS6MvrEVggubiGPQ3bAo6b9qgRXrRApevCxIDcWzOC6rvDn5bLmFDYXDAgH
+WhKRSP3VABcdi4IU5ByIxxjsV/jYlKqWFferAB4LzNvpcv78bEIv8JSD+0PoV4IJVQ2QC8dKg+sF
+Em2Ru2vR/gCgUeI9ZedGIvAJuPtyXc0/ERCKCttyUBHLGPeLlGrIBYfL/eAvZzf/scr5gJYUfTqA
+xwMLsnxXrgsCoATscvCkg5IiEaiovPdwM9oEQNKtIcBba4oUwD3u4IB00EnLIscHFbFMQR5cTVUU
+3vwYG0otsjYArrM/9D+9q0cQOaVhAMlTQZd6Xi4IuwJIQCLz79dsXFHd2OqBOoBN6Sd5dLWDFR6I
+BXku1f4uCCfuDe0RqIqdjxSQQBusOwKAg/FA4gcLdpLla1hKOehK/4QBCIAJMSoKwecExLnh1OmR
+I+IApxpKiyGJyd7VhqVeCYc6MKIaHjMVoYexTVf4r8jO0JfKBXXXEhvqtlqScmcXgJMk/IiDOZSO
+2J6unV5kWuD9MVwamfdQxdxg6QKwNNofA2sV7qzCD6rwGrWTJp9hWmo7CmoAUwLvi+GXFbi2PudP
+BxmkpbY1wpOpwK9pwAMVO9yYFLt9lyVaaluFCtIAZkzgVLUTpu/W4NUpLWlGaKmtd7Sk2l5NDfSF
+kdHS5xsGwGQGaMktl5d0WGq8AGyqw/YqnGuXoQ7SUheAJaClJKWl0z38qGr3cNaltMQypKVlt3ub
+tFQBZgQ+EsGOClzRMHCmUlqSLgBLQ0v7xQ7Bb6jDtiq8IzaqaiwTWlr2bnWYBnBjAm9M4Kc1uLVm
+N9XGpf1zS5mIa5q0NJumLz4ewYNV+ExkO2Fa2jd2yFRg6VIhjwv0K9xcg/uq8LbEPovakJYymXBs
+0tK4WDXLvVXYUoeVLbTkugAsDS1NC9SBTzdgRxU+GRlNzbYJLWU+5R600NKQwi01M9RnprQUn2Ra
+6pgjyRCzAfvFXNVtVbixDitScE7WAVBHnQk3XdKpVPMva8CDFbgkMkqaZelpqSMP5ZtxwZjAGrV0
+xo+r8AYPe2Vpr+N09K2IEDPQBwTeGcPPq2YjyulVfOkCsDS01KwDLgHDurTXMTsagDilo2GFvzu4
+pAifKBk1LRUIHXnzvHlVcFBhn8DNBfhhzi7RDqe1EEu1AzoKAMW4vQ9wCvfnYEse/uVgQC19sdRl
+WB0DQALksHTE3wK4OQ+/CaGgpvUxJ6cGLuwEulFMww8I3FCA7+bsMGcgvSl7Mrt6hVmnm16sUOKB
+lG7+7szNLLdJ1WeYVboJU7rZ5WBLER4MDYjhVPDtUnIbZpVupgRuKsB3cnZzoh3oJtMAxEAPZlQf
+DmFzHp4MjGoG2rjIPMwC3TSDqX+kdPNAaLVt7UY3mQKgSTdltUzmt/NwR96i2AGd2xXtvsLlSjcl
+oKTwSEo3fw0skFq5zHpahMuVbv7t4JaCRbMsE7pZtgBoSjn9CjWB2/Nwew72uuVFN8sSgBhrmtqj
+8PsQbsrDn9L2OYO6fAXf9gAkWK58SOHZlG62htacuUk3GWkM3n50E2MargLfz5mHsyelG9FsCL4t
+AVAsY1lWeCiELQX4QwC9ajshi80Cw3YSfrMY7ytFuDVnO2BQ5/pWZHG1DQA+pZ3toaWKV6hFs1nv
+U9eWVZIDHdQYti0P5TupO2O3W0oXgC4Ah9hCbeHiLjqLI2A50t84AgCTe+AONGxakCuShvrdtlkn
+7EwkaUzTYzGMixVQHQc4O5X5IV0TY9iboLMOm4+yYQnvSGYRgFhgvVraXMHVUO9y+kKr0juA6+0P
+uacyug/kuZx1TtQzkm7LypezYqygPAQNAVXdJzO5Z48AANCdEFxv/PR4SWxU01m+fa5vLLelmOa/
+PYYIfEkEhSfWsnd2q03TOASAg72jRfXXAlIR5DRvpTwV6RrkhRreKjbq6kwPFUFzJt1HAC5qYXV3
+ePzTmy89POl1IgCXU/RDhmDXDiwUAIELY+hX1EMwrdpI1G0/3BNyLUZDFYKBqT37FbYOiMiUkHwg
+tlFNs123dEHaf6q3PhbTQjIgIpHy8Kvr+55J6ccfKw5QQApeb5lRjRVcj6LXNOwgpLvmB0BF4IsN
+a5cQgcQKgmxO6efYgZhYIOZGGuP/bCh3DYm4CSE5N4bLGzAqlq/vrqOvHFZv8LEIPhzBfiEeFAlm
+1G/bUBt9bOtRRlkdodfXgdsETJTL/bV6blcosq6GahHcZQX4RTrGKurK+wjhj6W1Zj+qGZuk3f9n
+Yk3OWF87sAeb0+CPmwtKXVFZOTk5UVe9NBTEgY9A76ibYXkxox0MT5RyQqy68l0J3F0zv18hXiHi
+GspnN9QO7KZlFPBxAUi3RbITwlPq47+b8vqFQZHQQ5yA3lmDKxvWr63ZWNV1sODrWKH3pRH8sGot
+1eoQj4jLjatu3lgb+9lOmyeZHCtiPl4wkQ7zHPr6sLivjqsmgJQVtyO0UU1POfvSnuZs75afrKUW
+pCXHU0tdzVM9fKEBF0UwI6iHZJW4cMz7O9fXxi7bCeHZVoSpCwYgBSEQSP5XHLq6V9zmBlBF4wEl
+nBS7mbYttHv4zYAtp3M9GjQDgm8We8SpGhfVgqwLY/hoDKu8Gdw8hCtEmFLdvK46ds1WCC56iTHn
+83IumyDs7hl+f9FzV6+T9aOqGoLvV1xFkCedDazZFdjYjomMDXQeUGur/Hpv6YU3WppGpwQfgQyJ
+uJrq/lj1ijW18Z/MR/jzBgDmBjvv6hlZs1r91xX5VElEJlQRiEs2eUlikKogs9i3L/fwQbGKyh7L
+7Wja9MNXBU0gHBAhVkjw9+73wZdfV9/3zELmyssCX+bgg58vDZ0VIleBXtArri8CqgoxioB3dqvk
+YJS9TIUvTRB8OiE1BIoi5IEZ1booD8Vw67ra2O8Pl9GiA9DyUq75JS8UyqeELv8+r3qeCmd6WF9E
+gjBjkXOsUENVlBcc+oSI/JaEHasaY/9K5eI2zbnxvGIAtADh0sAimftsQ2k0X3sVjrWxyIiohhmx
+A76gOio5fTGZCXavZnSmVQ73gVx8skzedeB2Qri1gyaPqJmFUBchBJJFfrGD7vKjGctgn90S4kj3
+oDA76/+rYyUb3Yw66AAAAABJRU5ErkJgglBLAwQKAAAIAAC6ZGxd4FHRL/ETAADxEwAAJAAAAHJl
+cy9taXBtYXAteHhoZHBpLXY0L2ljX2xhdW5jaGVyLnBuZ4lQTkcNChoKAAAADUlIRFIAAACQAAAA
+kAgGAAAA50biuAAAE7hJREFUeNrtnXuMXVd1h7+1z7mPmbFnPJ6xE9vETsChPEtDohSooxpaKhWE
+GmhjqKBUTVs1baCIR4tIi0igBtIkDaGKoASlhAIpBgykCRAVZJMmtE1BFRAC5AWxjZ3E9nge9tzX
+OXv1j7WPZ+zanjsPz+Re7yVd2bozmnvP2d9Zv7XWXntviBYtWrRo0TrSZKk+WO2zBZCdIJuBnXE8
+2rLiXm0GJbzE/u1eex+4HZDugDQicNoeymQHpAquKzxQ8DIuPCF++s9G+/tX1vJkbZInK5uwNlGp
+qqBel84rdoolgIrPqshunIymLtnbf/iJ/cff+52QbIb8dHonOZ3gCOTFeyPVwfUZycs8XAL8qofz
+RFhZQShJoCyyMZt7TKbQQPEwJrBL4Hvi5R5RvW9188BD0z3T1aDXHPcQPy0BUkgKcPYztFyq7rUq
+vCHHX9InbpkDmgpNlMx+358RGn56IHICLgHKCOUwmodVmwn6nx73Re/ctjVHnnyqGBvAL+S9lgW+
+GA/wSN9Zq/s1vwLl8h6RDR6YVCU3sDTImgCi0fPMe/BkKpD2CuIg6Q2e/YjqflH97BHNPnpuY+xn
+xz/kTwuAdkD6csi2QbK5Z/itDt7dI3L2pLnY4os6QPw0HU+LlxIDnzlIWC6QMfUqBlQCTB4oQ7JM
+hEnVcY/840jNX/tcDk4EiPx8n1+Z50UIIAJ+d8/ql1TV39Tr5OLDqrTsmhIBycMHVYCe8HUPCxwQ
+GBF4SqAmwR1FawueMrBaYaXCsEJ/SL3qArVpbr5gLYF0QBxHVB/ORN++ZvLAXQpyNch8YiOZx0Uc
+lay91aF3lkU+nCLpYfQYcBJgeQh0fu7gOwncn8BPHOwTmBBohKcpWvvmgIpCH3C2h/M9XORhU27/
+L6k9pK0iawsgVZE0Bero9R+rHXjPNRaLO5kjRDIfeB5iY6W/59CnB8RtGVFVtQAtKb7JCoVxgR0J
+bC8ZOE+FTywrlMLFOaKEzcUL+fBqAc1AwEqFC3K4NIPfysxLjYWAJ4DkBXSlSDKu/p6xpPR7zz78
+xP65xkUyV3geoH/lqp7ynctEXnpIp7xOBiwL0fH2Eny8DA8EX9oboCluQAygFyaIlWkDmQGTgYSN
+Hi5vwRtbFjqMi0GEgZetEEnrqo+M5bxqY/PAw3OBSOYCz4PLlw8NtSrfWObkokOqLTGPiQKDCv+b
+wAfL8K3UPE3f1JeOwCySvAkWC00KXJzDVQ3YnMNoSNkSIIesH0mb6K6xnN/c2Dzw8DZItswCIpkF
+PAXo6RPV4W/3O3nJIdWWg1LhHpcp3FqCv6uY/g7olKuNtjTeKcHiTAHe1oR3NE3yWtMgWo6kDfRx
+75KL1xx58qn3gWs3sG57zmRnSPt+0TP0mYHj4CnS8XdW4V1Vg2ZADeMIz9LGSVl4sHsUPlyGy6tQ
+B6rhZwmkE2jWI7JB8+yrCqXnWwQiCwZQUefZUx1+x5C4ywrZmg7PWyrwyZKllI4FqlJFWxArqrer
+Fe5M4Q974AjQMw2iMdVspXMv2VsdvnEL5DunwqX5SVihiXt7hy8sw39nimb2x8UV8FRhe2rwZHG8
+ntZWAg4KvDSHT9WgF2hOeZKsXyQd1fx3z6mNbG8nqHbtAKaQ4PWWVCXJrHAoPrjGv6nAFyI8HWMt
+YEjhvgSurBoAblqSVFPVVOXm0YH1g4DOJGVupqxrC+R7eoavXOHcBRNo5iDJQr3h1jJ8qgRnRXg6
+DqJVCnencG15Kl514OrgB5w7e6Ix+f5QWnJzkrCCvN39/YNps/xwKqxohuCqV+HHCVzaM1Uyj+l5
+Z6b7EwKfrlnRcSzUiQR8Apol+oK1hw/+lDBdNVsPlAho2ixfucLJyqZVMI8Ct7VsqXoa4eloS4Ct
+FSsyplNBt/aJJJrrVaFsJLOSMDXisn2c1adwxRFVFXA5Nj2xvWRFwsL1RetMK+LYBxzcUrIJ2ULK
+xlU1RS57rLpig0B+sjZZdwowyarZ6wacrK0HLUwxUj9Rsgpz9DzdkeIvV/h0CR531jGhliTl/eKq
+FUkuPxUr7hRwIsibvPWWkAdadyTww8SmJ2KRsPNNMWj2OLgjhT49Oq6upuBVXh8WQuRtAVTMd+3q
+WbnOoZuOqBb9zXjgy6WpD47WPVJWVQNoYmrC1dVQrYr80saelReKpfRJOx7IATh1l/Q715sZeVLB
++nn+K7FZ9QhQdwHUA/zIwQ+c/T+Mb94nIOJeebKs/aRZmDp+vWiP9NhcyncS2C9WzYwAdV9KXxPY
+mR4T30oLwOsl00ObmQDKFUS8XtywYlBRjeb+JDZ+dXMsVAK+66wtNoDhGqoAL3qSVcuKpv2TAhTS
+dx1lwwDIeS0UDctGjgj81FnjT/Q+3QlQWeFnznrVi8a/FmgisiovJ+tPJGPHeyABaJRq56TCQGaB
+EyXsj+6N8tX1HujgseMsgO9FnCd7ZtsA+cSvLCMuOBtJsNUTE7Hy3PVxUF3gSbGlVmGcNbG1N6sA
+dp4KoJ1T8c7akgU/XrE/9pTYH48xUHdbDjwxbZyPLg9KdB3YziAzZmG50iPHuaXJEIJHgLpfyo6c
+wFF41d6Tea0TvCltpWvRulfK+P+xzaxn46NFmxNs0aJFgKJFgKJFgJbWkpg1RoDmah5bxutpc4FT
+tAhQSDdpAM/y8NamFcaKft/ojSJAbQEUdubi/Q3YXoNNmc3xtIh7DEeAZgHRQYFfyeH2OtxQtwV1
+B2Vq04FoEaBTWoqV5evYPjl3TcIft0ziJqKsRYDavUAJ3mgQuL4OX6jBRbm1qGRR1iJA7XqjVgDp
+4twgurZha6EKWYtFsQjQjLFRGuSrBfxZE+6qwZtb1qpyJMpaBKgdS6bJ2mqFm+rwuRq8cJqsxSA7
+AtSWrDWxbstLMvhyDT7QsEWTh+TYrU+iRYBOKmsJVmz0wF824c5JeH3LJG0yyloEqF1ZA5OwdQo3
+1+EzNXhukLU8yloEqF1Zq2PzaK/I4Cs1eG/D1o+PRlmLALV7UxJswyUB3tWEf5u03d8nwlkUUdYi
+QG3Jmg+ytkHhlpptTPlMtffiTH8EqK0ge7qs/XYGd0zCu5sGz6hMnfcRAYo2o6yNhlWbVzXgjhq8
+OuwtWD9DZS0CNA9Z2+jh1hp8sgbrg6zpGSZrEaB5yFoNC6p/J7Mg++1NA2jsDJK1CNA8b57DqtZV
+4OqGpf2vzEzqGnT/TH8EaIFkLQ+y9jxv+y5/rA5nh5l+uljWIkALLGuT2P7Zl7Xgzhr8xbS+7G5c
+JRIBOo2ytlxhawO+VINfz+y9buvLjgCdRlnLmOrL/lwNPlK3M0a6qS87ArQIsnYkNKv9QQu+VoM/
+aVobSTfIWgRoEWVtROxM2esasK1mZ3aNdHhfdgRoEe34vuxtk7bcaKCD+7IjQEskaxNhy8DLQ7b2
+5pZNhxzusAa2CNASBtnT+7I/Uod/rcOFub3XKX3ZEaCngaw1Q9r/a5ml/FsbdpbpQYkARWtT1oq+
+7Ca23Ogbk/CnzQhQtFmC5LHK9WqFNR2wIXdc1fs0MA3Q9AIVhbtS+GAFHnSW9keAop3U8jAIgwo/
+dnB9Bb5ass3dV3XAadgRoCUyHzzPgFpKf30ZPl62wHlF8DqdcJR6BGgJLMMOdetR+PfUTsD+fmIb
+PQx22EHGEaBFlqsEGFZ42MENFTsBW9Tey+m8U7AjQIsUJHvMw9QEPlqGm8t2gE0nyVUEaAnlqlfh
+Wyl8qAzfS6xXqNPkKgK0yHLlsH0Zf+7gxgp8vmTeaKhD5SoCtEhylQe5agr8U9kka2+QK+lguYoA
+LYJcVTFQ7k1ga8WOSV+m5nUyuu+0xwjQAlhxEN+Qwh4HV5fhsyXIZEqusi699gjQAslVJnBrCW4q
+wy5nXqhHuxecCNACyFUlyNX9Qa7uSaBvmlzlZ8B9iADNQa4IcrVPbNLzX0rWXdjtchUBWgC5WqYW
+8HymBDeW4dEgV/16ZoETAZqF5diWLoNqRcCtZdiRWowzfAbJVQRojnI1qLBfbO7qn0u2c+ug2s+z
+M/weRYBOJVeAU/hCydotHpomV3m8TRGgmeTqB4nNXX0jhWoHz5hHgBZJrjSk5YfE0vJbStbsNaj2
+syzepgjQyeSqD2sj/WoK14V+5AG1V/Q4EaCTylXRj/yggw9V4WsplKJcRYDalatxgetCP/KhMGMe
+5SoCdFLLsOUzZYWvp/D30/qRV0S5igCdSq6m9yNfW4GvlCCJchUBmilI9lgwPCk2W35z2QqDnd6P
+HAFaBLmqYDWcbwa5+m6HLp+JAC2BDSk8FlZ7bitZ01eUqwhQ2/aJEvxDxdouBqNcRYDaTdGrwCMO
+3lO1zQqGNIITAZpD8Lw81nQiQPP1RtFOr8UNpqJFgKJFgKJFgKJFgKZMTpTVRDszTE8MhLQNkBNp
+6XF/sBzd1Rlhgk3/nACq1owAbQ7wiea/yKyG4gTIw27qFY2p8ZkgSWf7qXEuth52XnYD7GzHA+WJ
+jDYMJgE0x8656gvzSBLvc1eax5zEajWnIeZ5xCvg3MF2JMwDyGRpd4ZOpCCC+a5htTNAWxGgrpWu
+DJszXDs1zgq4SdAk47GgUv6kAAmogqxl3wiqu0qGimZYC8SzvW2aFK07AWoKbPDmgYpTFkogmeqh
+Wqtn14libHfCGBq8inyvYm7MFx9woZ/aCydaFwIEXOBtP8cwzr6CgOgD5/H4aIiJZwTI3I7It4MG
+ItjuE5syc3FxcrI7U/cy8PLc9joKY69lAXD3nowXd5JYCs25Z1y16SAV0DpwvsKLc2sNjSl9d3mf
+OnC+D+M7pTKurqDef/NE8nVCgAS8gtvQ2P9ohv5PL6LhPUoKr81iJtZtlmBO4dWZZdtZ4KAK7gi6
+6xmNwe/oVEY/cxpfvC9we1kQBXXYcYyvzGCjN2IjRN3hfVrYwS6vbU2pi4LvFUFUvyw80gASaccD
+FaUgAF9q3X7I66GSQaotLEL/o5YdY53E+98V3mdM4LIWPMdDLUAl4CZU88zrJ6aHNm0BFNL5ZP34
++Iigty0XESAvPuxNLTt1eCLGQh3vfWrAuR6ubJnCBO+T94u4purXz22OPBiyr/YBKgImBclFb5hQ
+nUxtqxzNsZ25rmraISFxkrVzzYXY56+asNZbGi9FSq+Qin5gemY+K4ACce6c2sieJnpjv4jT4IXG
+BTZn8LYWjEjc4qMTrYSN3e+34A0tGA0hiYd8QCSZxH9+TW3kfrXYJz+VFztVbUAA2btmTZXR1o8q
+yIY6qmLeiB7g8ircmVps1Irj0hGWYsD8cg5frBlMgRBNrfwzmWnleevqe/dg01l+1h6oiIUAWbdv
+3yQiV5QEcUWdKETvN9VhUzjrvBTHpiPgGRd4podb6rbRxLT5zXxAxDXgr59R37ubU8Q+bQEUIMp3
+QLpucv/d46o3DIqkHrIkfHAfcFsNXprbevMI0dNbtkbFgubba7DeW9EwNenKBkXSEa/bN9QOfmyH
+FZDzNviY2YKUOYB9PUM7l+M2jaJZAmlxHtZh4Moq3J3aQr6T5n3RliRYdsABsUrzLXU4x1sWHeQr
+70OSJv7RWjm76FNjY+MA17QxhG1l4QJ6ddjowqfNSyfRx/qRNIcsDalgL3BbHd7etC9WC2THYuPS
+pukpll0dFHhjy2KedWopeykEzVUkydDxWq6vOW9sbPT5INe0+fzPany3QbIF8kfKw+cPJHyzhKw/
+jGYO0uKAtYGwcdPWMjwQTuarBG8UPdLiepwWVrc711uq/oZQaW4FsPIAj4OJw8qrNtT33ztT1jUv
+gIKcJTIF0d0VkfPGVVtiU2VH9+IZF/hkCW4rwx6xLVZ6OFqoOvqKtjCepnhpUISaWBPglpYVCdd6
+i3+K3/OQ9SGpR0fHVF7zrPr+e3dA+vJZNlvMSWEKiH7Wu+rsPtUvLRf3soPq85DyuWLzyn6Fxx3c
+kdrrQWdPQAnbYi4NQEWZm7sVu+U3sYawCjZX+erM5rae402uGmFMQu03HxRJJ9U/fCTXS89tjjw4
+F3iYz9gVcvYQVFZUh6+vOnlLQ6GBZmI7x0mO7ZTRpxYX/dDZGRPfdbZvz4hYn1EevdGcLMF6mAcV
+NihckFs/z4tze68WYlE35XXyEiT9Ihz2+sUDpcYVz5uYODhb2VoQgIInOlon2FMd3lIRru8VOWdU
+FQ+5s4Kj+HCxPWpNS3WxjGCvwJMCT8gxs8DRZhgwj3mas0P76drQCN8bWjGKOCfh6LymV3CDIlJT
+Hc2Qv11T23/z8WO46ABNT/EF8p8sWzY8lPW8V0X/vFekNG4gZUVcV8Q9LrjTMuaqoozNT75aARh/
+bDzkFbxAulyEpoJHP1fz7r0bGk89Fm67yjyf2QUbt+lu8Im+wRcmPnmHwpY+cb11VWposSl8UVOS
+GEgvXADN1H6iCrgK4noFDqvmotypyHVn1fffBzDXeOe0AnS8NwJ4srLqWc75NyvyOkFe0BeelIZq
+MW+WYy422jzGUCBJgQpCSaChkKGPiuod3rnbzprc//1Crq5us0C4JABNj43CheVFwP0b1cGLc5JX
+eGGTqr5IRdb0IaRyGr9Il1vh0idVUeWAiP4owf0H3u8cbiy7T3i8Pm08kNNQipPTfIFuJ7jj3eX+
+oaHlru7X55pscMiqutdzEtGqB/WRpZmKhAqIirRKyC5VP1IW9/PDaWP3+vHxkem/uwPSzRYH+U5/
+UmSbxcupxibG02bvs0Ql1VBGWawYbEmAOjZhiDZPJdOFyKiiRYsWLVq0M8j+D8I7+XpDiJXaAAAA
+AElFTkSuQmCCUEsDBAoAAAgAALpkbF0knCX2yBoAAMgaAAAlAAAAcmVzL21pcG1hcC14eHhoZHBp
+LXY0L2ljX2xhdW5jaGVyLnBuZ4lQTkcNChoKAAAADUlIRFIAAADAAAAAwAgGAAAAUtxsBwAAGo9J
+REFUeNrtnXuUXfV13z/7d859zUMjaSQQkhASDjiE1k4d3DjxChEkduKkCbUbKCSExMZ10rWoU2eF
+Ok4dg5Yx+AF2Ymxc49gxfi7eMWB3ZZEVYWIbt8V2G0xEsAkvgUDSSDMaae7rnN/uH7/f0dy5GonR
+aKQZ7t3ftQYN87xzzv7u/d2v3wGDwWAwGAwGg8FgMBj6BLLUX6CG1yiAPACy2e7ZksYDwGZQ4puE
+fw1HYfBOIdkKqb4MCGqY0z0t7qdbavdUlorRE97ybo+xi9HhZpm1LnWbSuqrTeUVZWSoZXa1pJAC
+ObRF/GMeaVcTfWI0yXfIxMTeWe53ejvoReBZ5Aghi2j0Eo1eJVwIAHZUTt7knP8ZUf3FHM5RdKOK
+rBlESCR8gyBYZF2KalrJAa8whSKwG9VnVeSRksjWUuIfWjY59qPO+62QAH6xpJIsluEL5MXHxgZX
+nJ3l7jdE5Dc9/JsBkWoCtBTaKO3wfYW3MMt/GeSVAkkKlBDK0cr2q2YCjwncl2h+z2hj70PFN22F
+dPMsCqCnCKCQFIb/DOtrA7Xmr3v0DzycNyyStBTqKD58jQqIBrK8LBJ2wyH3u0iEvYIIJFWEqkBd
+lVz5nhP9bDNt3bZ+cnJsMSKCnKALUUgdfZhTBk6ttX4f+KOauDM1eAYUsg6DN2PvUU5EUnggGUSk
+JDDl9QUR/XTm0ptOOfDizm5n+bImwFZIz4MMYFd19LdF3FVV4cyGQgPN44twh3stxdUq3hcLBUsa
+vuP+yEvcr0LWliAZEqGuulNVr/8/jbGP/xo0T0Q0OG62VNTvBfyzA6tfXVX9UEXkV1rB8LOYB7gj
+GXzQkFCOV0IITMqNAUsSTsM9K4jQFmgB7eLzhzG4GBXyEqRD4qir/qDpec+65q6/LRREZ+K85Alw
+GyQXxfC1ozp6ZUlkS1mktk81j6Q4xPCLWFcBapHvEwI7BH7sYLsL7+8U2C2BEIal5fmHgHUeViuc
+qnC6h/UeVkYHVhdoRCc3GxkKIgwgKQKZ10880yi9+xx2THUqiSVNAIVUIPvx4MknLdP85iHcBePq
+ySF3XXZ7UAwCQ9Hon3PwnQQeTOCHLvz/Ppn+y4uGgWFJJr0HHVlxT9conOXh5zM4N4dNPkT1/RIi
+w2xE8EH2MCrO7VP9QTNzl21ov/jDwraWLAGKF/hUdcXPD0vy5YrIxnHVjJDQSLfHT4FhDQb+7QTu
+TuG7CTzvwsWsKJSZlj905QJWD10akI570n2PW0AzivhVCq/J4YIMzs/gZIUDAk1mj+gesiGRVJXJ
+/er/cENj7CsLHQlkoY3/6eqqi4ZFPgMsO4BmbloWHgyVCizXIHHuSOFLJdiWhAs2EI2+MHQr/L/8
+yVFE7DYwFcmw0cOFGVzaDjJpXKbVQJe95GVISgh19X+6rjH2oYVMjmUhjf/Z6srLhl1yS0OVNnjX
+pVYyYAAoKdyXwvVleDSBqkItvhhvBt8XZGhEMqz3cEUbfrcd7GKfdHnMYBPqwI+KS/aov25tffef
+LVQkkAU1fkluqaN53pXoFlp/hcLjDj5Qgf+Zhumowfg5b/bRd2RIIhEOCLwuh/c24fU57JXpfK8z
+QRbIVoqUxtRft74+9mcPQ+mc6SLTiSfAQc1fW/lbK0hun0LzDJzr+Lk+/iHLFO4owXvLsMsFMqgZ
+vhEhEmGfBId4ZQuuaIW8odUliWL1qL1SpLQTvXrD1O4tx5oYyzEYfyKQP1lb+bph3P05DLQ52NQ6
+aPxpfPtAGT5VDhq/wnGoZxle1khi0jwuIUm+vgHDwNShJFAH+YBIOu79ZRsbY188lq7xvCqKV4Xv
+888NDa0aUHe7Q4baIUTNMP5SZO3bqnBjOSS+qRm/YRbk0RuvUrg3hbfUQt9nSGdatoDkkDRU/bDI
+Z7cPrP5pgfy2ebaG5kWAzaEzp2SVvx4UWX8AzTp7U55QyVHg7dWg91fHP8QSXMMRVAUZoXG2LYHf
+roWS+BAzSeBAMlBBSon6W3eNjg7H75fjTgCF5DzInqmO/slK5/7dBNruLHUWsicHLq/C/WlgtXl9
+w1yREdTCEw4uqcFzEqqHXZEgOYBmI+LOrE/JTRdB/sA8ooAcpfE7QHeUV55VStz3c0izrulNBarA
+Wzs8f9vuqWEeSAm9ojM83FkPhZTWoV47GxZJxzV/y4b6nruPNh842gggAuoTd2NFpBKTXunUcSMK
+15ThG9Hzm/EbjiUSjCg85uBdleDe3SxOuaVoCfcXOzh5kDByLQtOgIJZ26urLl4ucv6E6ozZnpxQ
+2ryjFKo9oyZ7DAtEgpUa1MQN5UCILinkGmg+IrKhXcv/XKYr7wsngRTkapDLWV9Jao1/qsBpjY6q
+j4+y51mB3xgIpavUEl7DAsIRBui+XIfzstA36BD86sJb2/vkrDXNF5+KasXP5efOBckW8FKrX7Zc
+ZGM9zGHM6PSWFa6phFHlihm/YYEhQKKwpQyTh45LSA5+SKSSS/5umX02b34EiHoqf5LTqsCf1jXs
+6nZKn+UK95aC7l9u0sdwHJATxmZ+mMBnyiEh7q4KTahqKvzejsrIRsIesjtmAjwQtL9WapO/NiJu
+YwM96P21I1O/vhSGmczzG44nCUYUbi7BNhcGKDs0jnjIl4lUPenbBPSBhSDA5vg7cuSd3fbtCfP8
+d6RhqnMAm+0xHD8UDndM4LOlMEXc5XDdAUVV5PLnOGUgTovKvAlQ7GI+Vx79yTLy+v2qFLmHMj3E
+9KX4Ysz4DSciCixT+FoprMpWO5yugGuifsTJWl9rvglg60s0x14qArj43wuGRdJO2eUJcxrfTkLb
+esASX8MJQolQbPl6GoYruxyvCqhDfisqGJ03Aa4GfxU4Rd7S1JlNryIzvzs9AYe3GAxd0ruicE86
+6wJNckBVUHnD0yMjKwTyIzXGDkuAq8BtAf+O6or1Cby6Hoh0UP5UCCc1PJTMykKD4bgSoEboED/i
+wikiHTJI2uAHRUbTRvm1RSHnqAlwdVHpkfRnB51UfJf8qWk4vWGHm578NBhOFBzhmJW/S2e1P18W
+8Phzowyadw6AqP5iMp2Ez8CDiRm+YXFQNF+/k4QOcZeLl7aCOH6hw2cfNQFyDWd1ntPq0v9F7f+H
+LmgxI4FhMQhQAZ4U2C6HRAHXAFTl7CdYMVIczjtnAsSTfHU3o0Ogm9rTOe/BZZcdAs/HX2z637AY
+BEiBcQf/4mbaYcgDlJIwWi6lG+mw37lGAAFoluUURE5qB24d7P6W4rLChLMjCg2LByGM2/+TC3NC
+3QpmQASX+o0xEXZzJkDxxS7NTx8UobvI44Bn3RzabAbDCSDBs25WFaKxZPnKIyXCR+4Eq6vOlgBL
+lEAGw2LLoAR4QcKJ4TILORSpHelnzEqAgi2icno3AYTwy3bGiThLgA2LSgANs0F1ZtpjccqgKK9g
+Fic+pwiQqy6fzdHnhFa0ndJsWGwkhLOEGsy6LokXlh91BDjo7UUOO9qf2rU3LCESyOFzhGzeBDhS
+jmvSx7CUpNB8bHguBDAYehpGAIMRwGAwAhgMRgCDwQhgMBgBDNM4Up3ZYAToeUzEboo1/4wAfYXi
+KTd/0Aon3o2JPajbCNBnF6cFvL0N36jDhW04QBi8Sk0WGQH6AUJ4bOc6hU814AsN+IkYDWZ7sLPB
+CNCTSXAjEuGXM7hnCt7TjCt5MvuDGwxGgJ67UElMiBPg3S24dwp+M55Vb7LICNA30cAT9iFOV/ir
+OnyuHmTRbpneUjIYAXo6L0hjMjwh8OtRFv1xK3x+wmSREaCfZFGRB7yvCX9Thzdm01tK1jswAvSN
+LBoTOCuHW+rwPxqwIcoiTBYZAfpFFk1JOKrvP7RDkvzHrUCO4qFuliQbAXr+grooi6rA1U24ow7n
+ZqGM2jJZZAToF1mUA7sEfjqHrzTg4w04OTbRTBYZAfpGFh2Q8OzkS9vw9Sn4z61ADpNFRoC+kkVj
+AsPAtU24s0MWtU0WGQH6ASlhrHosyqKv1uH6BqyIskhMFhkB+kkWHRB4Wxu+Xoe3tqHJ9FPQTRYZ
+AfpGFo0q3NCAW+vwb/PwMVvAMQL0jSxqA3sEXpfDbXX4SMMWcIwAfSiLJmOf4D+14Z46XNKelkom
+i4wAPY+iJLpbQr/gkw34ch1elYePmSwyAvSNLGoRSqSbM7i7Dtc0YChKJZNFRoC+kEUJoVmWA/+l
+DfdNTcuiKZNFRoB+kUVEWXSKwica8MU6nBmrRTnWOzAC9IksakZZ9EtZSJL/ezM8K3evySIjQL/c
+rGIv2QFXtsIm2pvboYI0hckiI0CfyKJiL3mTws0N+HwdXultL9kI0EdJcude8puysI75J63wOTuu
+xQjQV7KoMPj3NuFr9UAI20s2AvSdLBqTIIU+X4fP1GGj7SUbAfpNFk0RkuJ/H49rubJrL9luuhGg
+529qsZdcibLornroKu+VUE41WWQE6AtZlBMk0KvyMFf0iUZoqNleshGgr2RRMVV6SRvuq8MVcS95
+os/3ko0AfSaL9goMKlzTDEN25/X5cS1GgH6WRT7Ioo82YFWf7iUbAfpZFkVp9PtxL/ntrRAJ+um4
+FiOAySLGJJxM8ZFmWMn8uSzsHfTDAo4RwHBwL3lMwlL+rY0gi/phL9kIYJghiyZjn+Ctbbi3Hk6z
+2y/h42IEMPRDkiwxGqxW+FgD7pqCX8hClBAjgKFfIkIrGsgZHtZoGKfoRflnMByEEgx9mUJD4KYS
+fLwSIsIyDZ83Ahh6EhnhmQaDCt9K4JoKfDcJhr9cQ//AIoCh55BHqTOq8IyD91XgqynkEhpkOb1p
+/EYAkzvkUe60Bf6qBH9Zhu0ueHzREBV6GUaAPpY7FUID7B8S+GAFvp3AkIZIkNF7et8IYDhYyRlV
+2OHg2jLcUgoRYDTKnayProcRoM/kzrCCCnypBB8tw7+4EAWq2l+GbwTosyS3TND1/zuBD5Vhawo1
+DUlu1sNJrhHA5A4rFF4QuLYCXyyF+v6K2NjK+vwaGQF6WO4MAU7hjhJ8MMqdEQ1Vn9wukxGgV+VO
+KXr9HyTw4TL8bRo0/mifyx0jQB/InWKE+WMV+FwpTHIuN7ljBOh1uTMIpAp3luCGMjwWm1kjJneM
+AL0sd9Iodx518OEK3FuCivb+CIMRoM/ljka5MyGhrPnpcjgIa3mc2DS5YwToSWTAAFBW+HoavP4j
+sbqz3OSOEaCX5U5CkDaPObiuGgiQmtwxAvSD3BnRcITJX5bhk2XYFZtZJneMAD0td2qEkYX706D1
+v5+EeZ4VJneMAP0gdx53cEMF7o53atTkjhGgV9G5j1sX+Isy3BTlznKdjgoGI0BPy50HE7iuAg8l
+Qfub3DEC9LTcKfZxn3ZhhOHWFHw8l8fkjhGgZ+VOTvDwLQmNrBtL8Fwf7eMaAfpY7hT7uN9M4Loy
+fDftv31cI0CfoXMf9zkH15TDgkq/7uMaAfpM7hSLKLeUQoXnqSh3qiZ3jAC9LneWa6jqfKgMD8Z9
+XFtQMQL0ndxpCaw0uWME6HW5M0Q4YfnWUvD6T5rcMQL0Ojr3cb8X5c79JneMAP0id1ZoGFu4vgKf
+L4XpTTt+xAjQ83Kn2Me9Le7jPm77uEaAfpI7jzj4cFxQqdhpa0aAXpc7xT7ueDxt7TOlsJtr+7hG
+gJ6WOxmhulNSuCeFj5Th0cT2cY0AfSB3HEHa/LODa6vwjTQQwfZxjQA97/mXxcm0j5bh0yUYcyZ3
+jAB9ovcrwNYknLj2kMkdI0A/wUUP/+eV4O1tQcUI0JcSaCC+b3LHCNC3UsjQu1HeYDACGAxGAIPB
+CGAwGAEMBiOAwWAEMBj6lQCiKof7nNXGDUsFxYj64cx43gTwIq3DfdOQ2ullhqVh/IMalpNmtcfD
+2PARCfBA/DcR/1jWxSIlrP+tjXMxYvfAsEgQIBM4ScNaaqc9KuEZC+L9tiNFgiNLIHGtw3n5k8z9
+G5YAATxhJyM5jCLR+USAzVHit9v5U1OqSCDTjLCzwXd90GBYJAl06uy2KHlQMY93qpq5RoBApvbg
+85kyniIUBBPCYa6na8gDbDTYsJhIgJ/0sxZlXF0VRZ4C2HWYFMEdJrSognyW7eNO9KlS+JgvCNAC
+1ims0fC+5QGGxUBGeGDgT8RnLHTYoaaINJVJrZefBLjwMIXLI+UAbkv4pv9bFmZGAGClD8xriTUT
+DCceLjriDT68tWYas68EW/3ntewYUxA5mgjQmTWrd9+cLYV2wOtz6wcYFi8Bbgq81oc11Wymftdy
+sN5vy3RBiKMlQLDtsn9ov2rW+UMc4SmG52bTZ16aDDKcSCjhVI43ZLOW4yUHRJJvHikBPiIBBLyC
+rJsce6Kt/KiKiHbkAU3gdA8/k8OUySDDCZY/DWCTHmp/CppAMun9gYz8f0UC+PlEAIBEIEuEr9Wk
+IypEBqbABZnJIMOJJ0Bd4Fez0ANoz3Tc+aCIqvDgafWx52+DZMt8CXD7wcRB75pSpVsG7Rc4P4ON
+PkQEk0GGE4GcUP25IAt5gJup2yUBES93Alx4LLNAF0GuIKfUx77fUP1/g+Fn5YUMagMnK1zYDkeB
+mwwyHG8kwD6BX8rgX+cwxUz5UwI3oTpOqfG1Dr7MjwAdMih3yqdKgviubz4gcGkG6y0KGE4APOEE
+7ne0w8PEu4PDsIh45dZ1+/fv1mC7eqwEyBWk2cxuHfe6p4y4zp5AE1jn4YoYBWw8wnC8kBJO5L44
+g9flsL/LgAXcAVVNc3eTgtw+x3ziiCjqqJuYGBfVG4cF6QwrCeFo8N9thxe1z0hgOE6JbyM623e1
+Zq08ZstEXFO5Z0175z8C7qI5TOrMVbbnCqLl1o0TXveWw/f5zrBUUnhvM7DUqkKG40GAAwL/rRXk
+dqNLbgtIU5XE8f6j/bkviRgF3PrJybEcvXZIxGmHnSfApITO8JVN2Ct25JxhYaXPmMDFbfiddpBB
+6cy8IB8RSerwlbVTu78XtX8+R9ueGzR8rTwK6Yrqqu/XRM6eQvNOxaOExYTLq3BfGp6Ha+dpGo61
+6rMfeKWHu+pQZebkQaz8KDDZQH9qQ31sB2H2Z05CZM6VyxgF5F9By6u+U4IGOyTDbgI3NOBsfyhT
+DYajNf4GMAx8shme0zDL9HE+LOJa8L7T6mPPA06OQoUfVeleIN8K6anNsb/f5/WmFSKp73Dyxaj0
+MPCFOpzhQ1JsJDDM1/hrwC11OCsPMjvplj5Iukf9g6fWd39cw6f9Udr00SFKIfcs68ulav2hmrhX
+7++SQsWT0p8XuKQGP3aHTuwZDHMx/i/U4edy2NPlSBV8Obw7nmn2mlMa488cjfSZVwTokEK6ge11
+9XpJhk6lcEhSvB9Y6+GrMRLskbC5bzC8VMK7X6Y9/2GMXx34moiro29d2xh/+milz7wJEEngt0K6
+trVn25RyeUVEXJge1e7K0BoPd07BGzPYGbd2bGTCMJsUSWK155U53F2Hn53F+OPXZiMi6Xju339a
+feyerZDKPLdz592zugX8w1A6K5v6xyuSWmO1c2+sQxZLUAfZ1ZIgh96chf//VhKkUBU7V8gw7fVb
+hHzx4jZ8uhFWbidnMX6F9mpxpTHVL53aGHunQrrpGNT1MY/uaGBftr02eu2ouPfsVW378DHpSFYQ
+wsPl7k9hSwUedWGirxxzBiNDf2p9T5gkWOtDk+t32qHL257FOyu0R0VK417vWtPY/R+j2Xg5BvNZ
+kNm1ovHwfG3VtSvFvWdMfe7Bua6fnxOS4X0Snq5+czmEvGXxZC+PdZH7Qeq4aAuTEgbbLs7gv7bC
+8Sbj0XPKTPsCyFaLS/d4f9eaxu4LmZ5H02Ml4THjamAzpK/Kpu7/w1KNQeT8aMy+c2SjWGRIgfPz
+sM6GwBMOdse/pBRflE2V9g5cfCuGJyclRP435fDhJlzeDvd9vxx67zV6+OVIMoF+8R8auy89O/ak
+ZAGEw4La2VZIz4Ps+erKy6ribgapHEAz1yXlNHqAQYIH+JELT16/N4VtLpCkrOEZveks3sDk0tL1
+7sW/wvSDxFtAIxr9Jh82uS6I8/waCeFmMUYPeRlJagIH1L//lPrY+64CdzWoLJAZLLijLXKCZ2qj
+rx1A/npA3Nl71OeRsa7rD0RjQjwQpdEjDv4uhe8k8KQLc0VZR5Ugid0OtSixZFDcC084q7OQsgkh
+z9vgw+kNb8jgNXl43nJTwjJLESG6fp4C+TIkbaK7W/h3rKvvubtodMkC+kA5ThckEcgfX7ly2bK6
+u3EAuawFNAinS0jX79WOCzag0+Fwe5RH2xw86+AFCTnDuEyTwLA0PL+P9+4kDXu6p2qY3zkjntsz
+EhtFRYJ7uHK4h7wEyTIR9qv+fd3LO05r7nqiUBfHK2otOG6DpJjH3lFbfWGKfnBA5PQJVeL4xCFE
+6IwKjiCByh397TxewAbWS1iKUaAUZW2iQbrmhDJ4i2nLdYcxunjKplsuIg3VsQw+sKa++2Od0vp4
+yrbjdVGE0KHLn2DFyLJa8m6BP6qKDOyLRJDpHGnWi+pnqSCY8S9dEuQdeZpw5ManhiM4vUSP31JF
+4Qv7ffuqTc2Jp4oJZDmOxUE5QRfm4Hz2zvKqM0l5F8plgyIDUwpNtOjiOZnDazLps/QT4SPcOyVM
+DVCCZEiEKVUV5a5c/PVr6nu+e7y9/gknQHc0iEQ4I0n00hz5varIaQJMqdKezqFkroQwLOmooB3B
+XBJIBkVw4X6POeW2lujn1tbHHo5f764GtpyglpAswgVxMazlAC+yeogavyrom1X55YrISSWBdogM
+ZNP6UBflBRuOWgZ1KtYUpIJQjjd8SnVSVB8UJ3+jyH0nT+16ocMukBPcC5VFvFDuAXCdYW5ieHg0
+y6vnZOpfr3CuqvyUCKsHRGKDRPCoSaAljKKzmgN1VXIYR/mxQ7/lhG8K+vCq+p7tnfKYUNdflCEA
+WQIe42Ce1D3Rt3dkZLlmlVPrPn8FypkJUsuFVzhlOLdWwJJB3AwUL9pOPNtykXZVZFuKfzpx6TPD
+B17cOZvz2wy5WEo3kwzxcU+pmnH3FLaGe5pctcSKeLLUCQFI9BZAOOp6s3mNJV8IivfJs4BjCwaD
+wWAwGAwGg8FgMBiOAf8fWrxhCsdwX+gAAAAASUVORK5CYIJQSwMECgAACAAAumRsXUnQ33DIBgAA
+yAYAAA4AAAByZXNvdXJjZXMuYXJzYwIADADIBgAAAQAAAAEAHAAAAQAABgAAAAAAAAAAAQAANAAA
+AAAAAAAAAAAAJQAAAEoAAABwAAAAlwAAAL8AAAAiInJlcy9taXBtYXAtbWRwaS12NC9pY19sYXVu
+Y2hlci5wbmcAIiJyZXMvbWlwbWFwLWhkcGktdjQvaWNfbGF1bmNoZXIucG5nACMjcmVzL21pcG1h
+cC14aGRwaS12NC9pY19sYXVuY2hlci5wbmcAJCRyZXMvbWlwbWFwLXh4aGRwaS12NC9pY19sYXVu
+Y2hlci5wbmcAJSVyZXMvbWlwbWFwLXh4eGhkcGktdjQvaWNfbGF1bmNoZXIucG5nAAkJQ2luZVZl
+cnNlAAAAAiABvAUAAH8AAABlAHUALgBuAGUAdABzAHQAcgBlAGEAbQBpAG4AZwAuAGMAaQBuAGUA
+dgBlAHIAcwBlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAEAAAUAAAB8AQAA
+BAAAAAAAAAABABwAXAAAAAUAAAAAAAAAAAEAADAAAAAAAAAAAAAAAAcAAAAQAAAAGAAAACEAAAAE
+BGF0dHIABgZtaXBtYXAABQVjb2xvcgAGBnN0cmluZwAFBXN0eWxlAAAAAAEAHABYAAAABAAAAAAA
+AAAAAQAALAAAAAAAAAAAAAAADgAAABMAAAAeAAAACwtpY19sYXVuY2hlcgACAmJnAAgIYXBwX25h
+bWUACAhBcHBUaGVtZQAAAAACAhAAEAAAAAEAAAAAAAAAAgIQABQAAAACAAAAAQAAAAABAAABAlQA
+aAAAAAIAAAABAAAAWAAAAEAAAAAAAAAAAAAAAAAAoAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAIAAADAAAAAAECVABoAAAAAgAAAAEA
+AABYAAAAQAAAAAAAAAAAAAAAAADwAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAgAAAMBAAAAAQJUAGgAAAACAAAAAQAAAFgAAABAAAAA
+AAAAAAAAAAAAAEABAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAgAAAAAAAAACAAAAwIAAAABAlQAaAAAAAIAAAABAAAAWAAAAEAAAAAAAAAAAAAAAAAA
+4AEAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAA
+AAAAAAAIAAADAwAAAAECVABoAAAAAgAAAAEAAABYAAAAQAAAAAAAAAAAAAAAAACAAgAAAAAAAAAA
+BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAgAAAME
+AAAAAgIQABQAAAADAAAAAQAAAAAAAAABAlQAaAAAAAMAAAABAAAAWAAAAEAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAA
+AAEAAAAIAAAdIBIN/wICEAAUAAAABAAAAAEAAAAAAAAAAQJUAGgAAAAEAAAAAQAAAFgAAABAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAgAAAACAAAACAAAAwUAAAACAhAAFAAAAAUAAAABAAAAAAAAAAECVACwAAAABQAAAAEA
+AABYAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAQAAEAAwAAAC4CAwEGAAAAVAABAQgAAAEAAAN/MwQBAQgAAB0gEg3/
+NAQBAQgAAB0AAAD/NQQBAQgAAB0UCeX/UQQBAQgAAB0gEg3/UgQBAQgAAB0gEg3/UEsDBBQACAgI
+ALpkbF0AAAAAAAAAAAAAAAALAAAAY2xhc3Nlcy5kZXiVnAl8XFd18P/3zYw2y9Zo5EUeb0+yY0uJ
+I41kSZYtedEuWaMl1lhOrCx+1jxLE4/ejN88eSEJcRLAQAMYAiFACKFNWFooSb9QAiRsMZCWUAJN
+S/o1pdDSAiVAwtakpZ+/373vShorJiVKPGe927n3nnvOfW8maZ8qiW1rZuKzP/jZ7Vf862dezDyx
+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
+mtqbpMDaNXFdXS6dmrTrJq10uiaZmZydsR2v7vis7Z4es9P2pJdxO9Lpmi0nUkk7s6W2ti6XmbEX
+OnOq9ia/abPqVF3Wms3Zyc2bq07V2U5SYqfqXNtKnh7zLM/e3XhLbVvqaI1VtWtXtvam7C6rbcEQ
+2WxdNm2dTjlTNVbtLbdMbJHUlq1bNFNisvItW7eomiWcyXopO7nlurqjGbfHmpxe6JRde9P8SKxk
+sueE7XjxVM6zHdutsbfObvXcWbv2ltpbamtqeegi03ruaWneqktbombLRtkh291SWzeZtnI5WWvd
+ZMbxrJSTq9kynUombWdLbe1Nk+lMzh5VujW1bdpEDbe8atUzmaSV/sNqHpKqiypOZyYtOYq6aSs3
+vXnzRWTVrl1bNtZvuRR3S+1N06mcl3FP1x2xJo/lV3rLpOVNTktz3qJ5MWUyUcvG2q1m0nJNZ9bM
+Wq5tzjpmznZP2O7C4q5DbEXUIeoprLeyqfoZG9FAqLEuVteI2ElgZ309op2C9pST8nazst1LeWl7
+d83E9e3XXVHbXu+TGLvbKO7Y39d5Q2traytlHUnXzp2/w0w5J6x0Knn+Dgr1RqKoI5tNTNszNgWd
+bio5ZcuvVRR0TbuZGZvi+a5Rmr/yKOhKp2zHo6ArkzmWsqnoHtjf05UY2X/NDd0jB4fjIx3dYyzv
+tnOT5+9wJ+VwsxnXSXnn79hpUtydOemkM1YyR2Pv+Tvc83eYWdudSeVSs45tmUnbzHkZVUjaKuOZ
+OSt9wjKPpp58X8p2Z9N18u1/Y0D+iyP2YeyLI+IY8S6M+ACB+MAAwfjAgGTFCcQVLx4nGJeo/FTc
+Q6yMW9qdWNlsfceklzqR8k63cdlF/LneDlmONWW7m/bbx2ftnNfGuldTa2P1vFguStvx6rskPOW1
+UfkK0YACbVz+CsnYtOXayVHXPmq7tjNp5zb1JFNexm1j4/+u24Y5rzTlWtnp1GSuvjPlzVjZTV0Z
+52hqKr+fizTy+zkv6sqkZdvl8xLH9uoPuKk2ovOsTK6+czaVTm4a79k/NjAy3EbFxTInmbbza8/k
+6nucEyk348woKyyon0jZJ+vHU/bJ/FmZZ/a5mdnsprh1OjPrjVquNZNrY8XFageVf29j/Tz7pH3k
+WEpOhly587NVtVg+N59zbrCNTYtV9lknrNykm8p6cvrco9bkRaPSWgf2xw94qXT+etGScSs9a3dZ
+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
+Ri9DSU5FVkVSUy5TRlBLAQIUABQACAgIAMNkbF3l1d5JpgQAABQGAAAVAAAAAAAAAAAAAAAAAOgE
+AABNRVRBLUlORi9DSU5FVkVSUy5SU0FQSwECFAMUAAgICAC6ZGxd8ryCC0UEAAAkDAAAEwAAAAAA
+AAAAAAAAgAHRCQAAQW5kcm9pZE1hbmlmZXN0LnhtbFBLAQIUAxQACAgIALpkbF3HLoejGAsAAPgY
+AAARAAAAAAAAAAAAAACAAVcOAABhc3NldHMvc2V0dXAuaHRtbFBLAQIKAwoAAAgAALpkbF0yhZBN
+KQkAACkJAAAiAAAAAAAAAAAAAACAAa4ZAAByZXMvbWlwbWFwLWhkcGktdjQvaWNfbGF1bmNoZXIu
+cG5nUEsBAgoDCgAACAAAumRsXeKGTB7rBQAA6wUAACIAAAAAAAAAAAAAAIABFyMAAHJlcy9taXBt
+YXAtbWRwaS12NC9pY19sYXVuY2hlci5wbmdQSwECCgMKAAAIAAC6ZGxd7Zj7GbEMAACxDAAAIwAA
+AAAAAAAAAAAAgAFCKQAAcmVzL21pcG1hcC14aGRwaS12NC9pY19sYXVuY2hlci5wbmdQSwECCgMK
+AAAIAAC6ZGxd4FHRL/ETAADxEwAAJAAAAAAAAAAAAAAAgAE0NgAAcmVzL21pcG1hcC14eGhkcGkt
+djQvaWNfbGF1bmNoZXIucG5nUEsBAgoDCgAACAAAumRsXSScJfbIGgAAyBoAACUAAAAAAAAAAAAA
+AIABZ0oAAHJlcy9taXBtYXAteHh4aGRwaS12NC9pY19sYXVuY2hlci5wbmdQSwECCgMKAAAIAAC6
+ZGxdSdDfcMgGAADIBgAADgAAAAAAAAAAAAAAgAFyZQAAcmVzb3VyY2VzLmFyc2NQSwECFAMUAAgI
+CAC6ZGxdCzOAy8QqAAAwUwAACwAAAAAAAAAAAAAAgAFmbAAAY2xhc3Nlcy5kZXhQSwUGAAAAAAwA
+DABSAwAAY5cAAAAA
 CINEVERSE_B64_EOF
 
 # ------------------------------------------------------------------ hls.js (player)
 if [ ! -s "$APP/static/hls.min.js" ] || [ $UPDATE = 1 ]; then
   curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js \
    || curl -fsSL --retry 3 -o "$APP/static/hls.min.js.tmp" https://unpkg.com/hls.js@1/dist/hls.min.js \
-   || warn "Nu am putut descărca hls.js – playerul îl va încărca din CDN."
+   || warn "$(_t "Could not download hls.js – player will load it from CDN." "Nu am putut descărca hls.js – playerul îl va încărca din CDN.")"
   [ -s "$APP/static/hls.min.js.tmp" ] && mv "$APP/static/hls.min.js.tmp" "$APP/static/hls.min.js" || rm -f "$APP/static/hls.min.js.tmp"
 fi
 
 # ------------------------------------------------------------------ Python venv
-say "Creez mediul Python…"
+say "$(_t "Creating Python environment…" "Creez mediul Python…")"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install -q --upgrade pip >/dev/null
 "$APP/venv/bin/pip" install -q --upgrade "fastapi>=0.115" "uvicorn[standard]>=0.30" "httpx>=0.27" "guessit>=3.8" "pychromecast>=14" >/dev/null
-ok "Dependențe Python instalate"
+ok "$(_t "Python dependencies installed" "Dependențe Python instalate")"
 
 chown -R root:root "$APP"; chmod -R a+rX "$APP"
 chown -R $USR:$USR "$DATA"
@@ -9273,9 +9566,9 @@ if [ $UPDATE = 0 ] || [ -n "${MIGRATED:-}" ]; then
   IFS=';' read -ra DIRS <<< "$CINEVERSE_MEDIA"
   for d in "${DIRS[@]}"; do
     d=$(echo "$d" | xargs); [ -z "$d" ] && continue
-    [ -d "$d" ] || { warn "Folderul $d nu există (îl poți corecta din Administrare → Setări)"; continue; }
+    [ -d "$d" ] || { warn "$(_t "Folder $d does not exist (fix it from Admin → Settings)" "Folderul $d nu există (îl poți corecta din Administrare → Setări)")"; continue; }
     if ! runuser -u $USR -- test -r "$d" -a -x "$d" 2>/dev/null || ! runuser -u $USR -- ls "$d" >/dev/null 2>&1; then
-      say "Dau acces de citire utilizatorului '$USR' la $d (ACL)…"
+      say "$(_t "Granting read access for user '$USR' to $d (ACL)…" "Dau acces de citire utilizatorului '$USR' la $d (ACL)…")"
       p="$d"; while [ "$p" != "/" ]; do p=$(dirname "$p"); setfacl -m u:$USR:x "$p" 2>/dev/null || true; done
       setfacl -R -m u:$USR:rX "$d" 2>/dev/null || true
       setfacl -R -d -m u:$USR:rX "$d" 2>/dev/null || true
@@ -9286,7 +9579,7 @@ if [ -n "${MIGRATED:-}" ]; then
   id cinemo >/dev/null 2>&1 && userdel cinemo 2>/dev/null || true
 fi
 if [ $UPDATE = 0 ]; then
-  say "Configurez serverul…"
+  say "$(_t "Configuring server…" "Configurez serverul…")"
   runuser -u $USR -- env CINEVERSE_DATA="$DATA" "$APP/venv/bin/python" "$APP/server.py" setup \
     --admin-user "$CINEVERSE_ADMIN" --admin-pass "$CINEVERSE_PASS" --media-dirs "$CINEVERSE_MEDIA" \
     --tmdb-key "${TMDB_KEY:-}" --os-key "${OS_KEY:-}" --os-user "${OS_USER:-}" --os-pass "${OS_PASS:-}" >/dev/null
@@ -9314,6 +9607,8 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=full
 PrivateTmp=true
+KillMode=control-group
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -9324,25 +9619,25 @@ systemctl enable $SVC >/dev/null 2>&1
 systemctl restart $SVC
 
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "Port $CINEVERSE_PORT deschis în ufw"
-  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "mDNS (5353/udp) permis – pentru descoperirea Chromecast"
+  ufw allow "$CINEVERSE_PORT"/tcp >/dev/null && ok "$(_t "Port $CINEVERSE_PORT opened in ufw" "Port $CINEVERSE_PORT deschis în ufw")"
+  ufw allow 5353/udp comment "mDNS - Google Cast" >/dev/null && ok "$(_t "mDNS (5353/udp) allowed – for Chromecast discovery" "mDNS (5353/udp) permis – pentru descoperirea Chromecast")"
 fi
 
-say "Aștept pornirea…"
+say "$(_t "Waiting for startup…" "Aștept pornirea…")"
 for i in $(seq 1 30); do curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/" && break; sleep 1; done
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 if curl -fs -o /dev/null "http://127.0.0.1:$CINEVERSE_PORT/"; then
   echo
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
-  echo -e "  ${G}CineVerse by NetStreaming rulează!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
+  echo -e "  ${G}CineVerse by NetStreaming $(_t "is running" "rulează")!${N}   ➜  ${B}http://${IP:-localhost}:$CINEVERSE_PORT${N}"
   if [ $UPDATE = 0 ]; then
-    echo -e "  Utilizator: ${B}$CINEVERSE_ADMIN${N}"
-    [ -n "${GEN_PASS:-}" ] && echo -e "  Parolă generată: ${B}$CINEVERSE_PASS${N}"
+    echo -e "  $(_t "Username" "Utilizator"): ${B}$CINEVERSE_ADMIN${N}"
+    [ -n "${GEN_PASS:-}" ] && echo -e "  $(_t "Generated password" "Parolă generată"): ${B}$CINEVERSE_PASS${N}"
   fi
   VA=$(runuser -u $USR -- vainfo 2>/dev/null | grep -c VAEntrypointEncSlice || true)
-  [ "${VA:-0}" -gt 0 ] && echo -e "  Transcodare hardware: ${G}VAAPI disponibil${N}" || echo -e "  Transcodare hardware: vezi Administrare → Bibliotecă"
-  echo -e "  Loguri:  ${B}journalctl -u $SVC -f${N}"
+  [ "${VA:-0}" -gt 0 ] && echo -e "  $(_t "Hardware transcoding" "Transcodare hardware"): ${G}VAAPI $(_t "available" "disponibil")${N}" || echo -e "  $(_t "Hardware transcoding: see Admin → Library" "Transcodare hardware: vezi Administrare → Bibliotecă")"
+  echo -e "  $(_t "Logs" "Loguri"):  ${B}journalctl -u $SVC -f${N}"
   echo -e "${G}══════════════════════════════════════════════════════════════${N}"
 else
-  die "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager"
+  die "$(_t "Service did not start. Check:  journalctl -u $SVC -n 50 --no-pager" "Serviciul nu a pornit. Verifică:  journalctl -u $SVC -n 50 --no-pager")"
 fi
