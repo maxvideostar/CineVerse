@@ -5,13 +5,20 @@
 <title>CineVerse</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; width: 100vw; height: 100vh; overflow: hidden; font-family: Arial, sans-serif; }
-cast-media-player { width: 100vw; height: 100vh; display: block; opacity: 0; transition: opacity 0.6s; }
-cast-media-player.visible { opacity: 1; }
+body { background: #0d1117; width: 100vw; height: 100vh; overflow: hidden; font-family: Arial, sans-serif; }
+#player {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  opacity: 0;
+  transition: opacity 0.6s;
+  background: #000;
+}
+#player.visible { opacity: 1; }
 #splash {
   position: fixed;
   inset: 0;
-  background: #0d1117;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -33,17 +40,25 @@ cast-media-player.visible { opacity: 1; }
   <div class="tagline">by NetStreaming</div>
   <div class="spinner"></div>
 </div>
-<cast-media-player></cast-media-player>
+<video id="player" autoplay playsinline></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
 var context = cast.framework.CastReceiverContext.getInstance();
-context.getPlayerManager().addEventListener(
+var playerManager = context.getPlayerManager();
+var video = document.getElementById('player');
+var splash = document.getElementById('splash');
+
+playerManager.setMediaElement(video);
+
+playerManager.addEventListener(
   cast.framework.events.EventType.PLAYER_LOAD_COMPLETE,
   function() {
-    document.getElementById('splash').classList.add('hidden');
-    document.querySelector('cast-media-player').classList.add('visible');
+    splash.classList.add('hidden');
+    video.classList.add('visible');
   }
 );
+
 context.start();
 </script>
 </body>
