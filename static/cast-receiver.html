@@ -9,13 +9,21 @@ body {
   background: #0d1117;
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+}
+/* Splash screen - vizibil cand nu se reda nimic */
+#splash {
+  position: absolute;
+  width: 100%; height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-family: Arial, sans-serif;
-  overflow: hidden;
+  z-index: 10;
+  transition: opacity 0.5s;
 }
+#splash.hidden { opacity: 0; pointer-events: none; }
 .logo {
   font-size: 72px;
   font-weight: 900;
@@ -41,19 +49,46 @@ body {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* Player */
+cast-media-player {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
 </style>
 </head>
 <body>
-<div class="logo"><span>CINE</span>VERSE</div>
-<div class="tagline">by NetStreaming</div>
-<div class="spinner"></div>
+<div id="splash">
+  <div class="logo"><span>CINE</span>VERSE</div>
+  <div class="tagline">by NetStreaming</div>
+  <div class="spinner"></div>
+</div>
 
+<cast-media-player></cast-media-player>
+
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 <script>
 window.onload = function() {
   var context = cast.framework.CastReceiverContext.getInstance();
-  context.start();
+  var playerManager = context.getPlayerManager();
+
+  // Ascunde splash cand incepe redarea
+  playerManager.addEventListener(
+    cast.framework.events.EventType.MEDIA_STATUS,
+    function(event) {
+      var splash = document.getElementById('splash');
+      if (event.mediaStatus && event.mediaStatus.playerState === 'PLAYING') {
+        splash.classList.add('hidden');
+      } else if (!event.mediaStatus || event.mediaStatus.playerState === 'IDLE') {
+        splash.classList.remove('hidden');
+      }
+    }
+  );
+
+  context.start({
+    playbackConfig: new cast.framework.PlaybackConfig()
+  });
 };
 </script>
-<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </body>
 </html>
