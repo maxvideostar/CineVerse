@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, PlainTex
 from starlette.background import BackgroundTask
 from urllib.parse import quote
 
-VERSION = "3.4.1"
+VERSION = "3.4.2"
 APPDIR = Path(__file__).resolve().parent
 STATIC = APPDIR / "static"
 IS_WIN = os.name == "nt"
@@ -1225,6 +1225,7 @@ def scan_library():
     try:
         scan_state.update(running=True, phase="Caut fișiere", done=0, total=0, error="")
         found = {}
+        known = {r["path"] for r in q("SELECT path FROM media")}
         for root in media_dirs():
             if not os.path.isdir(root):
                 log.warning("Folder inexistent/inaccesibil: %s", root)
@@ -1234,7 +1235,15 @@ def scan_library():
                 dn[:] = [d for d in dn if not d.startswith(".") and d.lower() not in ("sample", "samples", "extras", "featurettes", "@eadir")]
                 for f in fn:
                     if Path(f).suffix.lower() in VIDEO_EXT and "sample" not in f.lower() and not f.startswith("."):
-                        found[os.path.join(dp, f)] = root
+                        fp = os.path.join(dp, f)
+                        try:
+                            if time.time() - os.path.getmtime(fp) < 120:   # inca se scrie (download in curs) -> il prindem la scanarea urmatoare
+                                if fp in known:
+                                    found[fp] = root
+                                continue
+                        except OSError:
+                            continue
+                        found[fp] = root
         existing = {r["path"]: r["id"] for r in q("SELECT id,path FROM media")}
         roots_ok = [r for r in media_dirs() if os.path.isdir(r)]
         for p, mid in existing.items():
@@ -1287,6 +1296,32 @@ def scan_library():
 
 def scan_async():
     threading.Thread(target=scan_library, daemon=True).start()
+
+
+def prune_missing():
+    """Scoate rapid din biblioteca fisierele sterse de pe disc (fara scanare completa)."""
+    roots_ok = [r for r in media_dirs() if os.path.isdir(r)]
+    if not roots_ok:
+        return 0
+    gone = [r["id"] for r in q("SELECT id,path FROM media")
+            if any(r["path"].startswith(rt) for rt in roots_ok) and not os.path.exists(r["path"])]
+    for mid in gone:
+        x("DELETE FROM media WHERE id=?", (mid,))
+    if gone:
+        x("DELETE FROM items WHERE id NOT IN (SELECT DISTINCT item_id FROM media WHERE item_id IS NOT NULL)")
+        log.info("prune: %d fisiere disparute scoase din biblioteca", len(gone))
+    return len(gone)
+
+
+def periodic_prune():
+    while True:
+        time.sleep(30)
+        if scan_lock.locked():
+            continue
+        try:
+            prune_missing()
+        except Exception as e:
+            log.warning("prune: %s", e)
 
 
 # ---------------------------------------------------------------- OpenSubtitles
@@ -1940,6 +1975,7 @@ def _startup():
     threading.Thread(target=live_refresher, daemon=True).start()
     threading.Thread(target=backup_worker, daemon=True).start()
     threading.Thread(target=periodic_scan, daemon=True).start()
+    threading.Thread(target=periodic_prune, daemon=True).start()
 
 
 app = FastAPI(title="CineVerse by NetStreaming", docs_url=None, redoc_url=None, lifespan=lifespan)
